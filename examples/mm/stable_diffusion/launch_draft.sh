@@ -2,6 +2,7 @@
 # this is meant to be an interactive node, so only 8 devices per expt
 PROJECT="NeMo-draft+"
 WANDB="d727288f26d60019e79de694e1a803181a18aab6"
+export WANDB_ENTITY="nvidia"
  
 export PYTHONPATH=/opt/NeMo:/opt/nemo-aligner:$PYTHONPATH
 
