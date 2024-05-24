@@ -16,7 +16,6 @@ ACTOR_CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 ACTOR_CONFIG_NAME="draftp_sd"
 ACTOR_CKPT="/opt/nemo-aligner/checkpoints/model_weights.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/vae.bin"
-# RM_CKPT="/home/ataghibakhsh/converted_pickscore.nemo"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
 ACTOR_WANDB_NAME=DRaFT+--ws-LR_${LR}-KL_${KL_COEF}-BS_${ACTOR_GLOBAL_BATCH_SIZE}
 DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/draft_p_saved_ckpts"
