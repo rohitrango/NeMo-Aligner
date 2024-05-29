@@ -14,7 +14,7 @@ DATASET=${DATASET:="pickapic50k.tar"}
 MICRO_BS=${MICRO_BS:=2}
 GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=2}
 PEFT=${PEFT:="none"}
-NUM_DEVICES=8
+NUM_DEVICES=1
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 
 RUN_DIR=/opt/nemo-aligner/run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
@@ -35,9 +35,9 @@ mkdir -p ${DIR_SAVE_CKPT_PATH}
 
 DEVICE="0,1,2,3,4,5,6,7"
 echo "Running DRaFT on ${DEVICE}"
+# && wandb login ${WANDB} \
 export HYDRA_FULL_ERROR=1 \
-&& wandb login ${WANDB} \
-&& MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=8 /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
+&& MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \
@@ -61,7 +61,7 @@ export HYDRA_FULL_ERROR=1 \
     trainer.draftp_sd.gradient_clip_val=10.0 \
     trainer.devices=${NUM_DEVICES} \
     rm.trainer.devices=${NUM_DEVICES} \
-    exp_manager.create_wandb_logger=True \
+    exp_manager.create_wandb_logger=False \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=False \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
