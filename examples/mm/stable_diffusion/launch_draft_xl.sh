@@ -11,10 +11,10 @@ INF_STEPS=${INF_STEPS:=25}
 KL_COEF=${KL_COEF:=0.1}
 ETA=${ETA:=0.0}
 DATASET=${DATASET:="pickapic50k.tar"}
-MICRO_BS=${MICRO_BS:=2}
+MICRO_BS=${MICRO_BS:=1}
 GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=2}
-PEFT=${PEFT:="none"}
-NUM_DEVICES=1
+PEFT=${PEFT:="sdlora"}
+NUM_DEVICES=8
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 
 RUN_DIR=/opt/nemo-aligner/run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
@@ -43,19 +43,18 @@ export HYDRA_FULL_ERROR=1 \
     model.optim.lr=${LR} \
     model.optim.weight_decay=0.005 \
     model.optim.sched.warmup_steps=0 \
-    model.infer.inference_steps=${INF_STEPS} \
-    model.infer.eta=0.0 \
+    model.sampling.base.steps=${INF_STEPS} \
     model.kl_coeff=${KL_COEF} \
     model.truncation_steps=1 \
     trainer.draftp_sd.max_epochs=1 \
     trainer.draftp_sd.max_steps=4000 \
     trainer.draftp_sd.save_interval=500 \
-    model.unet_config.from_pretrained=${UNET_CKPT} \
     model.first_stage_config.from_pretrained=${VAE_CKPT} \
     model.micro_batch_size=${MICRO_BS} \
     model.global_batch_size=${GLOBAL_BATCH_SIZE} \
     model.peft.peft_scheme=${PEFT} \
     model.data.webdataset.local_root_path=$WEBDATASET_PATH \
+    model.unet_config.from_pretrained=${UNET_CKPT} \
     rm.model.restore_from_path=${RM_CKPT} \
     trainer.draftp_sd.val_check_interval=20 \
     trainer.draftp_sd.gradient_clip_val=10.0 \
@@ -65,4 +64,4 @@ export HYDRA_FULL_ERROR=1 \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=False \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
-    exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
+    exp_manager.wandb_logger_kwargs.project=${PROJECT} &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt

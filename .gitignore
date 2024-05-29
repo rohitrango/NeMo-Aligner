@@ -161,3 +161,5 @@ slurm*.out
 dump/
 draft_p_saved_ckpts/
 draftp_xl_saved_ckpts/
+
+run_lr_*
