@@ -16,6 +16,7 @@ GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=2}
 PEFT=${PEFT:="sdlora"}
 NUM_DEVICES=8
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
+LOG_WANDB=${LOG_WANDB:="False"}
 
 RUN_DIR=/opt/nemo-aligner/run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WANDB_NAME=SDXL_DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
@@ -26,22 +27,25 @@ mkdir -p ${LOGDIR}
 
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME="draftp_sdxl"
-UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet.ckpt"
+# UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae.bin"
+UNET_CKPT="/opt/nemo-aligner/sdxl_ao_tang/unet.ckpt"
+# VAE_CKPT="/opt/nemo-aligner/sdxl_ao_tang/vae.ckpt"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
 DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/draftp_xl_saved_ckpts"
+NEMO_FILE="/opt/nemo-aligner/checkpoints/sdxl_base.nemo"      # this model is from Ao Tang
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
 
-DEVICE="0,1,2,3,4,5,6,7"
+export DEVICE="0,1,2,3,4,5,6,7"
 echo "Running DRaFT on ${DEVICE}"
-# && wandb login ${WANDB} \
-export HYDRA_FULL_ERROR=1 \
-&& MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
+wandb login ${WANDB} 
+export HYDRA_FULL_ERROR=1 
+MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \
-    model.optim.weight_decay=0.005 \
+    model.optim.weight_decay=0.0005 \
     model.optim.sched.warmup_steps=0 \
     model.sampling.base.steps=${INF_STEPS} \
     model.kl_coeff=${KL_COEF} \
@@ -49,19 +53,21 @@ export HYDRA_FULL_ERROR=1 \
     trainer.draftp_sd.max_epochs=1 \
     trainer.draftp_sd.max_steps=4000 \
     trainer.draftp_sd.save_interval=500 \
-    model.first_stage_config.from_pretrained=${VAE_CKPT} \
+    trainer.draftp_sd.val_check_interval=20 \
+    trainer.draftp_sd.gradient_clip_val=10.0 \
     model.micro_batch_size=${MICRO_BS} \
     model.global_batch_size=${GLOBAL_BATCH_SIZE} \
     model.peft.peft_scheme=${PEFT} \
     model.data.webdataset.local_root_path=$WEBDATASET_PATH \
-    model.unet_config.from_pretrained=${UNET_CKPT} \
     rm.model.restore_from_path=${RM_CKPT} \
-    trainer.draftp_sd.val_check_interval=20 \
-    trainer.draftp_sd.gradient_clip_val=10.0 \
     trainer.devices=${NUM_DEVICES} \
     rm.trainer.devices=${NUM_DEVICES} \
-    exp_manager.create_wandb_logger=False \
+    exp_manager.create_wandb_logger=${LOG_WANDB} \
+    model.first_stage_config.from_pretrained=${VAE_CKPT} \
+    model.unet_config.from_pretrained=${UNET_CKPT} \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=False \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
     exp_manager.wandb_logger_kwargs.project=${PROJECT} &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
+
+    # pretrained_checkpoint.restore_from_path=${NEMO_FILE} \
