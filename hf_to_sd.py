@@ -26,6 +26,7 @@ class SegTree:
         self.nodes = dict()
         self.val = None
         self.final_val = 0
+        self.convert_name = None
     
     def add(self, name, val=0):
         prefix, subname = split_name(name)
@@ -175,6 +176,10 @@ nemo_data = torch.load(nemo_path)
 ## get unet
 nemo_unet = filter_keys(lambda key: key.startswith("model.diffusion_model"), nemo_data)
 nemo_unet = map_keys(lambda key: key.replace("model.diffusion_model.", ""), nemo_unet)
+
+nemo_vae = filter_keys(lambda key: key.startswith("first_stage_model"), nemo_data)
+nemo_vae = map_keys(lambda key: key.replace("first_stage_model.", ""), nemo_vae)
+
 hf_unet = torch.load(hf_unet_path)
 
 def model_to_tree(model):
