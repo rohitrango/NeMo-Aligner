@@ -3,7 +3,10 @@ import torch
 import numpy as np
 import json
 from pprint import pprint
-from compare_sdxl_keys import *
+try:
+    from compare_sdxl_keys import *
+except:
+    pass
 
 vt_fn = lambda x: np.sum([np.prod(list(t)) for t in x])
 
@@ -207,6 +210,14 @@ def combine_trees(*treenames):
         newtree.final_val += tree.final_val
     return newtree
 
+combine_hint_list = [
+    (("conv_in", "down_blocks"), "input_blocks"),
+    (("conv_norm_out", "conv_out"), "out"),
+    (('down_blocks/0',), ("input_blocks/3", "input_blocks/1", "input_blocks/2")),
+    (('down_blocks/1',), ("input_blocks/4", "input_blocks/5", "input_blocks/6")),
+    (('down_blocks/2',), ("input_blocks/7", "input_blocks/8")),
+]
+
 # upto this part it works fantastically, now try the hard part (matching)
 def try_graph_matching(tree1, tree2, tab=0, key1=None, key2=None, combine_hints=combine_hint_list):
     '''
@@ -301,13 +312,6 @@ def try_graph_matching(tree1, tree2, tab=0, key1=None, key2=None, combine_hints=
                 print()
     return
 
-combine_hint_list = [
-    (("conv_in", "down_blocks"), "input_blocks"),
-    (("conv_norm_out", "conv_out"), "out"),
-    (('down_blocks/0',), ("input_blocks/3", "input_blocks/1", "input_blocks/2")),
-    (('down_blocks/1',), ("input_blocks/4", "input_blocks/5", "input_blocks/6")),
-    (('down_blocks/2',), ("input_blocks/7", "input_blocks/8")),
-]
     # ({'down_blocks/2', 'down_blocks/1', 'down_blocks/0'}, {'input_blocks/2', 'input_blocks/3', 'input_blocks/7', 'input_blocks/6', 'input_blocks/8', 'input_blocks/1', 'input_blocks/5', 'input_blocks/4'})
     
 
