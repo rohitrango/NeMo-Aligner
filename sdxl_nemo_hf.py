@@ -4,6 +4,7 @@ from nemo.collections.multimodal.models.text_to_image.stable_diffusion.diffusion
 from omegaconf import OmegaConf
 import torch
 from functools import partial
+from torch.nn import ModuleList
 
 vae_hf_dir = "/opt/nemo-aligner/checkpoints/sdxl/vae"
 unet_hf_dir = "/opt/nemo-aligner/checkpoints/sdxl/unet"
@@ -44,8 +45,8 @@ def compare_unet():
     context = torch.zeros(1, 80, 2048).cuda()
     # extra context for hf
     add_cond_kwargs = {
-        'add_time_ids': torch.zeros(1, 6).cuda(),
-        'text_embeds': torch.zeros(1, 2048).cuda(),
+        'time_ids': torch.zeros(1, 6).cuda(),
+        'text_embeds': torch.zeros(1, 1280).cuda(),
     }
 
     # nemo_pre_hooks = {}
@@ -55,7 +56,14 @@ def compare_unet():
     hf_debug, hf_handles = {}, {}
     nemo_debug, nemo_handles = {}, {}
     def hf_hook(key, model, input, output):
+        print(output)
         hf_debug[key] = output
+        return output
+    
+    def nemo_hook(key, model, input, output):
+        print(output)
+        nemo_debug[key] = output
+        return output
     
     def getattr_recur(module, name):
         namesplit = name.split(".")
@@ -64,10 +72,52 @@ def compare_unet():
             mod = getattr(mod, n)
         return mod
     
-    hf_keys = ['add_embedding.linear_2', 'down_blocks', 'time_embedding.linear_2']
+    def clear_handles(dict):
+        keys = list(dict.keys())
+        for k in keys:
+            dict[k].remove()
+            del dict[k]
+    
+    clear_handles(hf_handles); clear_handles(nemo_handles)
+    
+    ##### HF
+    # add hooks to zero out embeddings
+    unet_hf.add_embedding.register_forward_hook(lambda model, input, output: torch.zeros_like(output))
+    unet_hf.time_embedding.register_forward_hook(lambda model, input, output: torch.zeros_like(output))
+    
+    hf_keys = ['down_blocks', 'mid_block', 'up_blocks']
     for k in hf_keys:
-        handle = getattr_recur(hf_unet, k).register_forward_hook(partial(hf_hook, k))
+        mod = getattr_recur(unet_hf, k)
+        if isinstance(mod, ModuleList):
+            mod = mod[-1]
+        handle = mod.register_forward_hook(partial(hf_hook, k))
         hf_handles[k] = handle
+    
+    # run output
+    with torch.no_grad():
+        z_hf = unet_hf(tensor, time, context, added_cond_kwargs=add_cond_kwargs)['sample']
+
+
+    #### Nemo
+    unet_nemo.label_emb.register_forward_hook(lambda model, input, output: torch.zeros_like(output))
+    unet_nemo.time_embed.register_forward_hook(lambda model, input, output: torch.zeros_like(output))
+    nemo_keys = ['input_blocks', 'middle_block', 'output_blocks']
+    for k in nemo_keys:
+        handle = getattr_recur(unet_nemo, k)[-1].register_forward_hook(partial(nemo_hook, k))
+        nemo_handles[k] = handle
+    
+    with torch.no_grad():
+        z_nemo = unet_nemo(tensor, timesteps=time, y=y, context=context)
+
+    def error(t1, t2, eps=1e-8):
+        abs_error = torch.abs(t1 - t2).mean()
+        rel_error = (torch.abs(t1 - t2)/(torch.abs(t2) + eps)).mean()
+        return abs_error, rel_error
+    
+    print(error(nemo_debug['output_blocks'], hf_debug['up_blocks'][0]))
+    print(error(nemo_debug['middle_block'], hf_debug['mid_block'][0]))
+    print(error(nemo_debug['input_blocks'], hf_debug['down_blocks'][0]))
+    print(error(z_nemo, z_hf))
 
     # y = contains the input to label_emb or add_emb (clip pooled features + HW embedding)
     # context contains CLIP VIT context (B, S, D)
