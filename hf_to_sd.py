@@ -73,7 +73,6 @@ def strip_wb_keys(keys):
     newkeys = list(set(newkeys))
     return newkeys
 
-
 def traverse_segtree(tree, tab=0, max_depth=np.inf, v_transform_fn=lambda x: x):
     if tab >= max_depth:
         return
@@ -85,7 +84,6 @@ def traverse_segtree(tree, tab=0, max_depth=np.inf, v_transform_fn=lambda x: x):
     # if no children, then this is a child node
     if len(tree.nodes) == 0:
         print(f"{tabstr} {v_transform_fn(tree.val)}")
-
 
 def stat_segtree(tree, tab=0, max_depth=np.inf, \
                 v_transform_fn=vt_fn,
