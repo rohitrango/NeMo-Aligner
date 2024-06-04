@@ -14,26 +14,25 @@ DATASET=${DATASET:="pickapic50k.tar"}
 MICRO_BS=${MICRO_BS:=1}
 GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=2}
 PEFT=${PEFT:="sdlora"}
-NUM_DEVICES=1
+NUM_DEVICES=${NUM_DEVICES:=8}
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 LOG_WANDB=${LOG_WANDB:="False"}
 
-RUN_DIR=/opt/nemo-aligner/sdxl_draft_run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WANDB_NAME=SDXL_DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
 LOGDIR=${RUN_DIR}/logs
 mkdir -p ${LOGDIR}
-
 # UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl_ao_tang/unet.ckpt"
 # VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl_ao_tang/vae.ckpt"
 
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME="draftp_sdxl"
-UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet.ckpt"
-VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae.bin"
+UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
+VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
-DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/draftp_xl_saved_ckpts"
+DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts"
 # NEMO_FILE="/opt/nemo-aligner/checkpoints/sdxl_base.nemo"      # this model is from Ao Tang
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
@@ -54,7 +53,7 @@ MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NU
     trainer.draftp_sd.max_epochs=1 \
     trainer.draftp_sd.max_steps=4000 \
     trainer.draftp_sd.save_interval=500 \
-    trainer.draftp_sd.val_check_interval=10 \
+    trainer.draftp_sd.val_check_interval=20 \
     trainer.draftp_sd.gradient_clip_val=10.0 \
     model.micro_batch_size=${MICRO_BS} \
     model.global_batch_size=${GLOBAL_BATCH_SIZE} \
@@ -65,10 +64,11 @@ MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NU
     rm.trainer.devices=${NUM_DEVICES} \
     exp_manager.create_wandb_logger=${LOG_WANDB} \
     model.first_stage_config.from_pretrained=${VAE_CKPT} \
+    model.first_stage_config.from_NeMo=True \
     model.unet_config.from_pretrained=${UNET_CKPT} \
+    model.unet_config.from_NeMo=True \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=False \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
     exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
-
     # pretrained_checkpoint.restore_from_path=${NEMO_FILE} \
