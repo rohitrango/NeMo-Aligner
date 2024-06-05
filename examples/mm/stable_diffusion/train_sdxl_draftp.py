@@ -126,9 +126,9 @@ def main(cfg) -> None:
     init_cfg = deepcopy(cfg.model)
     init_cfg.peft.peft_scheme = "none"
     init_model = DiffusionEngine(init_cfg, None).to(torch.cuda.current_device()).eval()
-    # for p in init_model.parameters():
-    #     p.requires_grad = False
-    # init_model.train(mode=False) 
+    for p in init_model.parameters():
+        p.requires_grad = False
+    init_model.train(mode=False) 
     ptl_model.init_model = init_model
 
     ckpt_callback = add_custom_checkpoint_callback(trainer, ptl_model)

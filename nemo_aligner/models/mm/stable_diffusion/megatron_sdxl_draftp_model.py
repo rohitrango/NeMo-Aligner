@@ -154,7 +154,7 @@ class MegatronSDXLDRaFTPModel(MegatronDiffusionEngine, SupervisedInterface):
             batch_size = len(batch)
 
             force_uc_zero_embeddings = ['txt', 'captions']   # force zero embeddings for text and captions
-            cond, u_cond = self.model.conditioner.get_unconditional_conditioning(
+            cond, u_cond = model.conditioner.get_unconditional_conditioning(
                 batch_c, batch_uc=None, force_uc_zero_embeddings=force_uc_zero_embeddings,
             )
             additional_model_inputs = {}   # not necessary for now
@@ -191,8 +191,8 @@ class MegatronSDXLDRaFTPModel(MegatronDiffusionEngine, SupervisedInterface):
                 generator=None,
             ).to(torch.cuda.current_device())
 
-        image_draft_p, reward_draft_p, vae_decoder_output_draft_p = self.generate_log_images(latents, prompts, self.model)
-        image_init, reward_init, _ = self.generate_log_images(latents, prompts, self.init_model)
+        image_draft_p, reward_draft_p, vae_decoder_output_draft_p = self.generate_log_images(latents+0, prompts, self.model)
+        image_init, reward_init, _ = self.generate_log_images(latents+0, prompts, self.init_model)
 
         images = []
         captions = []

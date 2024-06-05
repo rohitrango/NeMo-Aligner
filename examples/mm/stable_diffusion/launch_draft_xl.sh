@@ -18,8 +18,11 @@ NUM_DEVICES=${NUM_DEVICES:=8}
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 LOG_WANDB=${LOG_WANDB:="False"}
 
-RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
-WANDB_NAME=SDXL_DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+## job name to save in custom directory
+JOBNAME=${JOBNAME:=""}
+
+RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/${JOBNAME}/sdxl_draft_run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+WANDB_NAME=SDXL_DRaFT+${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
 LOGDIR=${RUN_DIR}/logs
@@ -68,7 +71,6 @@ MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NU
     model.unet_config.from_pretrained=${UNET_CKPT} \
     model.unet_config.from_NeMo=True \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
-    exp_manager.resume_if_exists=False \
+    exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
     exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
-    # pretrained_checkpoint.restore_from_path=${NEMO_FILE} \
