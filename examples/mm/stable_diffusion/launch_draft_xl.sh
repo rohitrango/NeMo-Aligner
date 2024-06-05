@@ -1,8 +1,9 @@
 #!/bin/bash
 # this is meant to be an interactive node, so only 8 devices per expt
-PROJECT="NeMo-draft+"
-WANDB="d727288f26d60019e79de694e1a803181a18aab6"
+export PROJECT="NeMo-draft+"
+export WANDB="d727288f26d60019e79de694e1a803181a18aab6"
 export WANDB_ENTITY="nvidia"
+export WANDB_API_KEY=${WANDB}
  
 export PYTHONPATH=/opt/NeMo:/opt/nemo-aligner:$PYTHONPATH
 
@@ -17,9 +18,11 @@ PEFT=${PEFT:="sdlora"}
 NUM_DEVICES=${NUM_DEVICES:=8}
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 LOG_WANDB=${LOG_WANDB:="False"}
+JOBNAME=${JOBNAME:="dummy"}
+SLEEP=${SLEEP:=0}
 
-RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
-WANDB_NAME=SDXL_DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+WANDB_NAME=SDXL_DRaFT+${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
 LOGDIR=${RUN_DIR}/logs
@@ -32,16 +35,13 @@ CONFIG_NAME="draftp_sdxl"
 UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
-DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts"
+DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts_${JOBNAME}
 # NEMO_FILE="/opt/nemo-aligner/checkpoints/sdxl_base.nemo"      # this model is from Ao Tang
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
 
-export DEVICE="0,1,2,3,4,5,6,7"
-echo "Running DRaFT on ${DEVICE}" 
-wandb login ${WANDB}  
-export HYDRA_FULL_ERROR=1 
-MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
+# sleep $SLEEP
+export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 && CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES --master_port=30030 /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \
@@ -68,7 +68,9 @@ MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NU
     model.unet_config.from_pretrained=${UNET_CKPT} \
     model.unet_config.from_NeMo=True \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
-    exp_manager.resume_if_exists=False \
+    exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
     exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
     # pretrained_checkpoint.restore_from_path=${NEMO_FILE} \
+
+# MASTER_PORT=15003 
