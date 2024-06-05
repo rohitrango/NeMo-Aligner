@@ -55,12 +55,22 @@ def resolve_and_create_trainer(cfg, pop_trainer_key):
     OmegaConf.resolve(cfg)
     with temp_pop_from_config(cfg.trainer, pop_trainer_key):
         return MegatronStableDiffusionTrainerBuilder(cfg).create_trainer()
+    
+def wandb_login():
+    import wandb
+    import os
+    # get environment variable
+    env = os.environ.get("WANDB")
+    if env is not None:
+        wandb.login(key=env)
+
 
 @hydra_runner(config_path="conf", config_name="draftp_sdxl")
 def main(cfg) -> None:
 
     logging.info("\n\n************** Experiment configuration ***********")
     logging.info(f"\n{OmegaConf.to_yaml(cfg)}")
+    wandb_login()
 
     # TODO: has to be set true for PyTorch 1.12 and later.
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -132,7 +142,7 @@ def main(cfg) -> None:
     ptl_model.init_model = init_model
 
     ckpt_callback = add_custom_checkpoint_callback(trainer, ptl_model)
-    timer = Timer(cfg.exp_manager.get("max_time_per_run", "0:24:00:00"))
+    timer = Timer(cfg.exp_manager.get("max_time_per_run", "0:03:55:00"))   # save a model just before 4 hours
 
     draft_p_trainer = SupervisedTrainer(
         cfg=cfg.trainer.draftp_sd,
