@@ -21,6 +21,7 @@ ACTOR_WANDB_NAME=DRaFT+--ws-LR_${LR}-KL_${KL_COEF}-BS_${ACTOR_GLOBAL_BATCH_SIZE}
 DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/draft_p_saved_ckpts"
 # DATASET_PATH="/opt/nemo-aligner/datasets/pickapic_51306.tar"
 DATASET_PATH="/opt/nemo-aligner/datasets/pickapic50k.tar"
+LOG_WANDB=${LOG_WANDB:="True"}
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
 
@@ -48,12 +49,12 @@ git config --global --add safe.directory /opt/nemo-aligner \
     model.peft.peft_scheme="none" \
     model.data.webdataset.local_root_path=${DATASET_PATH} \
     rm.model.restore_from_path=${RM_CKPT} \
-    trainer.draftp_sd.val_check_interval=1 \
+    trainer.draftp_sd.val_check_interval=20 \
     trainer.draftp_sd.limit_val_batches=1 \
     trainer.draftp_sd.gradient_clip_val=10.0 \
     trainer.devices=${ACTOR_NUM_DEVICES} \
     rm.trainer.devices=${ACTOR_NUM_DEVICES} \
-    exp_manager.create_wandb_logger=True \
+    exp_manager.create_wandb_logger=${LOG_WANDB} \
     exp_manager.wandb_logger_kwargs.name=${ACTOR_WANDB_NAME} \
     exp_manager.resume_if_exists=False \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
