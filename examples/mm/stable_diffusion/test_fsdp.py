@@ -3,7 +3,8 @@ from torch import nn
 from torch.nn import functional as F
 import os
 import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP 
+from torch.distributed.fsdp.wrap import ModuleWrapPolicy
 from tqdm import tqdm
 
 class Net(nn.Module):
@@ -28,9 +29,7 @@ class Net(nn.Module):
     def forward(self, x, y=None):
         if y is None:
             y = 0
-        print(list(self.fc1.parameters()), x.shape, x.device, y.shape, y.device)
         x = self.fc1(x) + y 
-        print(x.shape, x.device, list(self.fc2.parameters()))
         x = self.fc2(x)
         return x
 
@@ -40,6 +39,95 @@ def init_dist(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
+def test_recursive_model(dev):
+    print("Testing recursiveness. ")
+    class Net(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = nn.Linear(32, 32)
+            self.ref = self
+
+        def forward(self, x):
+            return self.fc(x)
+    
+    model = Net()
+    print(model.fc)
+    print(model.ref.__class__.__name__)
+
+
+def test_ignored_states(dev):
+    print("Testing ignored states.")
+    model = Net().to(dev)
+    ignored_states = []
+    ## when model fc1 grad is set to false, then it can be added to `ignored_states` and FSDP doesnt mind
+    model.fc1.requires_grad_(False)
+    ignored_states = [model.fc1] 
+    model = FSDP(model, ignored_states=ignored_states)
+    optim = torch.optim.Adam(model.parameters(), lr=1e-3)   # optimizer must be called AFTER fsdp
+
+    x = torch.randn(10000, 32).to(dev)
+    y = torch.randn(10000, 64).to(dev)
+    pbar = tqdm(list(range(100)))
+
+    print(model) 
+    for i in pbar:
+        optim.zero_grad()
+        out = model(x, y)
+        ### This does not work, we're calling submodules of Net independently. Note that these submodules are just empty views now
+        ### and the actual parameters are sharded and are managed internally
+        ### to invoke them the actual model has to be called
+        # x1 = model.fc1(x) + y
+        # print(x1.shape)
+        # out = model.fc2(x1)
+        # print(out.shape)
+        loss = (out**2).mean()
+        loss.backward()
+        optim.step()
+        pbar.set_description(f"Iteration: {i}, loss: {loss.item()}.")
+
+def test_nested_policy(dev):
+    print("Testing nested policy")
+    # we will have two modules, nested within the same module (the idea is that second module acts like an adapter)
+    # we will attempt to learn only the unfrozen part inside fsdp
+    class AdapterModule(nn.Module):
+        def __init__(self, *chans):
+            super().__init__()
+            n = len(chans)
+            layers = []
+            for i in range(n-1):
+                layers.append(nn.Linear(chans[i], chans[i+1]))
+                layers.append(nn.ReLU())
+            self.layers = nn.Sequential(*layers[:-1])
+        
+        def forward(self, x):
+            return self.layers(x)
+
+    class Network(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.mods = nn.ModuleList(
+                [nn.Sequential(   # we will freeze this one
+                    nn.Linear(32, 64),
+                    nn.ReLU(),
+                    nn.Linear(64, 64)
+                ),
+                AdapterModule(64, 128, 1)  # we give it a different name to wrap appropriately
+                ]
+            )
+        
+        def forward(self, x):
+            x = self.mods[0](x)
+            x = self.mods[1](x)
+            return x
+    
+    # define a model
+    model = Network().to(dev)
+    model.mods[0].requires_grad_(False)
+    # wrap in fsdp
+    model = FSDP(model, auto_wrap_policy=ModuleWrapPolicy([AdapterModule]))       # works
+    # model = FSDP(model)           # does not work since it has submodules in different `requires_grad` states
+    print(model)
+    
 
 if __name__ == '__main__':
     # torchrun --nproc-per-node=2 test_fsdp.py
@@ -51,32 +139,8 @@ if __name__ == '__main__':
     torch.cuda.set_device(local_rank)
     dev = torch.cuda.current_device()
 
-    model = Net().to(dev)
-    ignored_states = []
-    ## when model fc1 grad is set to false, then it can be added to `ignored_states` and FSDP doesnt mind
-    # model.fc1.requires_grad_(False)
-    # ignored_states = [model.fc1] # + [x for x in model.fc1.modules()]
-    model = FSDP(model, ignored_states=ignored_states)
-    # model.fc1.requires_grad_(False)
-    optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+    # test_ignored_states(dev)
+    # test_nested_policy(dev)
+    test_recursive_model(dev)
 
-    x = torch.randn(10000, 32).to(dev)
-    y = torch.randn(10000, 64).to(dev)
-    pbar = tqdm(list(range(1000)))
-
-    print(model) 
-
-    for i in pbar:
-        optim.zero_grad()
-        out = model(x, y)
-
-        ### This does not work, gives some error about Outputview (only on the layers that are sharded)
-        # x1 = model.fc1(x) + y
-        # print(x1.shape)
-        # out = model.fc2(x1)
-        # print(out.shape)
-
-        loss = (out**2).mean()
-        loss.backward()
-        optim.step()
-        pbar.set_description(f"Iteration: {i}, loss: {loss.item()}.")
+    cleanup()

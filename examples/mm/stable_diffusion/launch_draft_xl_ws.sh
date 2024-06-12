@@ -72,6 +72,6 @@ export DEVICE="0,1" && echo "Running DRaFT on ${DEVICE}"  && wandb login ${WANDB
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
-    +model.activation_checkpointing=True \
     exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
+    #+model.activation_checkpointing=True \
 
