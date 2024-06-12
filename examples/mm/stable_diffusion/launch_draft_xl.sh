@@ -40,8 +40,16 @@ DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts_${JOB
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
 
+## Setup multinode parameters
+if [ ! -z "${RDZV_ID}" ]; then
+	DISTRIBUTED_PARAMS="--rdzv_id $RDZV_ID --rdzv_backend c10d --rdzv_endpoint $head_node_ip:30030"
+else
+	DISTRIBUTED_PARAMS="--master_port=30030"
+fi
+echo "Setting distributed params to $DISTRIBUTED_PARAMS"
+
 # sleep $SLEEP
-export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 && CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES --master_port=30030 /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
+export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 && CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \
