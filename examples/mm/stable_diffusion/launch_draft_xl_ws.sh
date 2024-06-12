@@ -33,10 +33,8 @@ mkdir -p ${LOGDIR}
 
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
-# UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
-# VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
-UNET_CKPT=null
-VAE_CKPT=null
+UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
+VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
 DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts_${JOBNAME}
 # NEMO_FILE="/opt/nemo-aligner/checkpoints/sdxl_base.nemo"      # this model is from Ao Tang
