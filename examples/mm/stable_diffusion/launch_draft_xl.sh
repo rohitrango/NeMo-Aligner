@@ -36,6 +36,10 @@ UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
 DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts_${JOBNAME}
+if [ ! -z "${ACT_CKPT}" ]; then
+    ACT_CKPT="model.activation_checkpointing=$ACT_CKPT "
+    echo $ACT_CKPT
+fi
 # NEMO_FILE="/opt/nemo-aligner/checkpoints/sdxl_base.nemo"      # this model is from Ao Tang
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
@@ -75,6 +79,7 @@ export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT on ${DEVICE}"  && wandb l
     model.first_stage_config.from_NeMo=True \
     model.unet_config.from_pretrained=${UNET_CKPT} \
     model.unet_config.from_NeMo=True \
+    $ACT_CKPT \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
