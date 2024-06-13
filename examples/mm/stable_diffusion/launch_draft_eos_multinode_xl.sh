@@ -4,7 +4,7 @@
 #SBATCH -N 4
 #SBATCH -t 4:00:00
 #SBATCH --ntasks=4
-#SBATCH --job-name=coreai_dlalgo_genai-draft:*
+#SBATCH --job-name=coreai_dlalgo_genai-draftp-mulitnode:*
 #SBATCH --partition=batch
 #SBATCH --exclusive
 #SBATCH --overcommit
@@ -22,14 +22,13 @@ export LOG_WANDB=${LOG_WANDB:="True"}
 export JOBNAME=${JOBNAME:="default"}
 export CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
 
-## garbage SBATCH --ntasks-per-node=1
-
 ### Multinode setup
-nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
+nodes=$(scontrol show hostnames $SLURM_JOB_NODELIST)
 nodes_array=($nodes)
 head_node=${nodes_array[0]}
 export head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
 export RDZV_ID=$RANDOM
+export NNODES=4
 
 echo Node IP: $head_node_ip
 

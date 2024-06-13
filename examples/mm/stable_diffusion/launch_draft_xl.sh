@@ -1,5 +1,5 @@
 #!/bin/bash
-# this is meant to be an interactive node, so only 8 devices per expt
+# this is assumed to run on EOS node, so 8 H100 GPUs
 export PROJECT="NeMo-draft+"
 export WANDB="d727288f26d60019e79de694e1a803181a18aab6"
 export WANDB_ENTITY="nvidia"
@@ -27,9 +27,6 @@ WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
 LOGDIR=${RUN_DIR}/logs
 mkdir -p ${LOGDIR}
-# UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl_ao_tang/unet.ckpt"
-# VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl_ao_tang/vae.ckpt"
-
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
 UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
@@ -40,9 +37,16 @@ if [ ! -z "${ACT_CKPT}" ]; then
     ACT_CKPT="model.activation_checkpointing=$ACT_CKPT "
     echo $ACT_CKPT
 fi
-# NEMO_FILE="/opt/nemo-aligner/checkpoints/sdxl_base.nemo"      # this model is from Ao Tang
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
+
+# setup multinodes
+if [! -z "$NNODES" ]; then
+	NNODES="--nnodes $NNODES"
+else
+	NNODES=""
+fi
+echo "Setting nodes to $NNODES"
 
 ## Setup multinode parameters
 if [ ! -z "${RDZV_ID}" ]; then
@@ -53,7 +57,7 @@ fi
 echo "Setting distributed params to $DISTRIBUTED_PARAMS"
 
 # sleep $SLEEP
-export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 && CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
+export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 && CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $NNODES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \
