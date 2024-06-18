@@ -7,6 +7,16 @@ export WANDB_API_KEY=${WANDB}
  
 export PYTHONPATH=/opt/NeMo:/opt/nemo-aligner:$PYTHONPATH
 
+# setup multinodes
+if [ ! -z "$NNODES" ]; then
+	NUMNODES=$NNODES;
+	NNODES="--nnodes $NNODES"
+else
+	NUMNODES=1;
+	NNODES=""
+fi
+
+echo "Setting nodes to $NNODES"
 LR=${LR:=0.00025}
 INF_STEPS=${INF_STEPS:=25}
 KL_COEF=${KL_COEF:=0.1}
@@ -16,7 +26,7 @@ MICRO_BS=${MICRO_BS:=1}
 GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=4}
 PEFT=${PEFT:="sdlora"}
 NUM_DEVICES=${NUM_DEVICES:=8}
-GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
+GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION*NUMNODES))
 LOG_WANDB=${LOG_WANDB:="True"}
 JOBNAME=${JOBNAME:="dummy"}
 SLEEP=${SLEEP:=0}
@@ -39,14 +49,6 @@ if [ ! -z "${ACT_CKPT}" ]; then
 fi
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
-
-# setup multinodes
-if [! -z "$NNODES" ]; then
-	NNODES="--nnodes $NNODES"
-else
-	NNODES=""
-fi
-echo "Setting nodes to $NNODES"
 
 ## Setup multinode parameters
 if [ ! -z "${RDZV_ID}" ]; then
@@ -77,7 +79,9 @@ export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb 
     model.data.webdataset.local_root_path=$WEBDATASET_PATH \
     rm.model.restore_from_path=${RM_CKPT} \
     trainer.devices=${NUM_DEVICES} \
+    trainer.num_nodes=${NUMNODES} \
     rm.trainer.devices=${NUM_DEVICES} \
+    rm.trainer.num_nodes=${NUMNODES} \
     exp_manager.create_wandb_logger=${LOG_WANDB} \
     model.first_stage_config.from_pretrained=${VAE_CKPT} \
     model.first_stage_config.from_NeMo=True \

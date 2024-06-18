@@ -23,16 +23,18 @@ export JOBNAME=${JOBNAME:="default"}
 export CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
 
 ### Multinode setup
-nodes=$(scontrol show hostnames $SLURM_JOB_NODELIST)
-nodes_array=($nodes)
-head_node=${nodes_array[0]}
+# nodes=$(scontrol show hostnames $SLURM_JOB_NODELIST)
+# nodes_array=($nodes)
+# head_node=${nodes_array[0]}
+head_node=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 export head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
 export RDZV_ID=$RANDOM
-export NNODES=4
+export NNODES=$SLURM_JOB_NUM_NODES
 
 echo Node IP: $head_node_ip
 
 # srun --container-image gitlab-master.nvidia.com/dl/joc/nemo-ci/train:pipe.13548649 --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
 # srun --container-image /lustre/fsw/portfolios/coreai/users/rohitkumarj/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
 
-srun --ntasks-per-node=8 --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
+# srun --ntasks-per-node=8 --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
+srun --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
