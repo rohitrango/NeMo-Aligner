@@ -152,6 +152,7 @@ tests/data
 
 # outputs folder
 wandb
+**/nemo_experiments
 
 # Checkpoints, config files and temporary files created in tutorials.
 .hydra/
