@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH -A coreai_dlalgo_genai
-#SBATCH -p batch
 #SBATCH -N 4
 #SBATCH -t 4:00:00
 #SBATCH --ntasks=4
@@ -37,4 +36,6 @@ echo Node IP: $head_node_ip
 # srun --container-image /lustre/fsw/portfolios/coreai/users/rohitkumarj/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
 
 # srun --ntasks-per-node=8 --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
-srun --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh
+srun --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh \
+--container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm \
+bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft_xl.sh

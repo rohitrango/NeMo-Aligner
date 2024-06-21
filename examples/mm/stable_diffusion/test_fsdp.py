@@ -128,6 +128,67 @@ def test_nested_policy(dev):
     # model = FSDP(model)           # does not work since it has submodules in different `requires_grad` states
     print(model)
     
+def test_partial_batchsize_fsdp(dev, rank, world_size, forward_max_rank=None):
+    '''
+    The idea of this test is to reduce the memory usage with only running forward passes on 1 machine and seeing the mem usage stats
+    
+    Update: This does not work with subset of workers, all workers have to contribute.
+    '''
+    class Module(nn.Module):
+        def __init__(self,):
+            super().__init__()
+            modules = [nn.Linear(32, 32) for _ in range(20)]
+            self.mods = nn.Sequential(*modules)
+
+        def forward(self, x):
+            return self.mods(x)
+
+    class Net(nn.Module):
+        def __init__(self):
+            super().__init__()
+            modules = [Module() for _ in range(world_size)]
+            self.mods = nn.Sequential(*modules)
+
+        def forward(self, x):
+            return self.mods(x)
+    
+    # we have defined the model class, now instantiate
+    net = FSDP(Net(), auto_wrap_policy=ModuleWrapPolicy([Module]), device_id=dev)
+    if local_rank == 0:
+        print(net)
+    # now run an optimization on this
+    optim = torch.optim.Adam(net.parameters(), lr=1e-3)
+    if local_rank == 0:
+        input("Before training...")
+    torch.distributed.barrier()
+    pbar = range(1000) if local_rank > 0 else tqdm(range(1000))
+    for i in pbar:
+        optim.zero_grad()
+        # if local_rank < forward_max_rank:
+        if True:
+            x = torch.randn(10000, 32).to(dev)
+            out = net(x)
+            loss = F.mse_loss(out, -x)
+            loss.backward()
+            print(f"iter: {i}, {local_rank}, {loss.item()}")
+        optim.step()
+
+    if local_rank == 0:
+        input("After training...")
+    torch.distributed.barrier()
+    
+
+    
+def print_cuda_stats(rank):
+    print(f"Stats for rank {rank}")
+    total_memory = torch.cuda.get_device_properties(rank).total_memory
+    reserved_memory = torch.cuda.memory_reserved(rank)
+    allocated_memory = torch.cuda.memory_allocated(rank)
+    free_memory = reserved_memory - allocated_memory
+    print(f"Total GPU Memory: {total_memory / 1e9} GB")
+    print(f"Reserved Memory: {reserved_memory / 1e9} GB")
+    print(f"Allocated Memory: {allocated_memory / 1e9} GB")
+    print(f"Free Memory (within reserved): {free_memory / 1e9} GB")
 
 if __name__ == '__main__':
     # torchrun --nproc-per-node=2 test_fsdp.py
@@ -141,6 +202,9 @@ if __name__ == '__main__':
 
     # test_ignored_states(dev)
     # test_nested_policy(dev)
-    test_recursive_model(dev)
+    # test_recursive_model(dev)
+    test_partial_batchsize_fsdp(dev, local_rank, world_size, 2)
+    if local_rank == 0:
+        print_cuda_stats(local_rank)
 
     cleanup()
