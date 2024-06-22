@@ -28,8 +28,8 @@ exp_manager:
   name: megatron_multicrop_rm
   create_wandb_logger: False
   wandb_logger_kwargs:
-    project: null
-    name: null
+    project: Pickscore-Multicrop
+    name: ${name}
   resume_if_exists: True
   resume_ignore_no_checkpoint: True
   resume_from_checkpoint: ${model.resume_from_checkpoint}
@@ -53,13 +53,13 @@ model:
   precision: 32
   # specify micro_batch_size, global_batch_size, and model parallelism
   # gradient accumulation will be done automatically based on data_parallel_size
-  micro_batch_size: 32 # limited by GPU memory
+  micro_batch_size: 24 # limited by GPU memory
   global_batch_size: 32 # will use more micro batches to reach global batch size
   tensor_model_parallel_size: 1 # intra-layer model parallelism
   pipeline_model_parallel_size: 1 # inter-layer model parallelism
   virtual_pipeline_model_parallel_size: null # interleaved pipeline
 
-  restore_from_pretrained: null # used in fine-tuning
+  from_pretrained: /opt/nemo-aligner/checkpoints/clip/clip_h.ckpt # used in fine-tuning
   # multimodal configs
   output_dim: 1024
   #  As the number of devices used to train increases, so does the space complexity of
@@ -90,6 +90,7 @@ model:
     output_dim: ${model.output_dim}
     class_token_length: 1
     preprocess_layernorm: True # apply layer norm to embedded tokens
+    freeze: False
 
     # model architecture
     encoder_seq_length: 196
@@ -137,11 +138,11 @@ model:
     megatron_legacy: True
     activation: gelu
 
-
   text:
     precision: 32
     # text configs
     output_dim: ${model.output_dim}
+    freeze: False
 
     # model architecture
     encoder_seq_length: 77
@@ -239,15 +240,27 @@ model:
     ranks: [ 0 ] # Global rank IDs to profile
     gen_shape: False # Generate model and kernel details including input shapes
 
+  # optim:
+  #   name: fused_adam
+  #   lr: 1e-3
+  #   weight_decay: 0.2
+  #   betas:
+  #     - 0.9
+  #     - 0.98
+  #   sched:
+  #     name: CosineAnnealing
+  #     warmup_steps: 2000
+  #     constant_steps: 0
+  #     min_lr: 1e-5
   optim:
     name: fused_adam
-    lr: 1e-3
-    weight_decay: 0.2
+    lr: 1e-4
+    weight_decay: 1e-5
     betas:
       - 0.9
-      - 0.98
+      - 0.99
     sched:
       name: CosineAnnealing
-      warmup_steps: 2000
+      warmup_steps: 300
       constant_steps: 0
       min_lr: 1e-5

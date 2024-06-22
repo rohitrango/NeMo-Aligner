@@ -30,11 +30,12 @@ def main(cfg) -> None:
     logging.info("\n\n************** Experiment configuration ***********")
     logging.info(f'\n{OmegaConf.to_yaml(cfg)}')
 
-    assert (
-        cfg.trainer.devices * cfg.trainer.num_nodes
-    ) * cfg.model.micro_batch_size == cfg.model.global_batch_size, (
-        "Gradient accumulation is not supported in CLIP yet."
-    )
+    #assert (
+        #cfg.trainer.devices * cfg.trainer.num_nodes
+    #) * cfg.model.micro_batch_size == cfg.model.global_batch_size, (
+        #"Gradient accumulation is not supported in CLIP yet."
+    #)
+    cfg.model.global_batch_size = cfg.trainer.devices * cfg.trainer.num_nodes * cfg.model.micro_batch_size
 
     trainer = MegatronTrainerBuilder(cfg).create_trainer()
     exp_manager(trainer, cfg.exp_manager)

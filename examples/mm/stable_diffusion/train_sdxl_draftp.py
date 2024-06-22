@@ -124,7 +124,7 @@ def main(cfg) -> None:
 
     logging.info("\n\n************** Experiment configuration ***********")
     logging.info(f"\n{OmegaConf.to_yaml(cfg)}")
-    wandb_login()
+    # wandb_login()
 
     # set cuda device for each process
     local_rank = int(os.environ.get('LOCAL_RANK', 0))

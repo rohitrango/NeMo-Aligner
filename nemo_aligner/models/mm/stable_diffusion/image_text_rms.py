@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from torchvision.transforms import CenterCrop, Compose, InterpolationMode, Normalize, Resize
+import safetensors
 
 from megatron.core import parallel_state
 from nemo.collections.multimodal.data.clip.clip_dataset import get_preprocess_fns
@@ -98,6 +99,17 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         sigma = attn_cfg.get('sigma', 0.02)
         num_layers = attn_cfg.get('num_layers', 2)
 
+        # check for frozen
+        if model_cfg.vision.freeze:
+            logging.info("Freezing vision model.")
+            self.vision_encoder.requires_grad_(False)
+            self.vision_encoder.eval()
+        
+        if model_cfg.text.freeze:
+            logging.info("Freezing text model.")
+            self.text_encoder.requires_grad_(False)
+            self.text_encoder.eval()
+
         # get a bunch of sample resolutions for augmentation
         self.resolutions = model_cfg.get('sample_resolutions', [512, 768, 1024, 1280, 1536, 2048])
 
@@ -113,12 +125,30 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             num_attention_heads=attn_cfg.num_attention_heads,
             precision=model_cfg.precision,
         )
-            # hidden_size=attn_cfg.hidden_size,
-
         self.logit_scale = torch.nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        
+        ## Load from pretrained clip model
+        # TODO: Separate modules by names and then load them separately to keep track of missing/unexpected keys
+        from_pretrained = model_cfg.get('from_pretrained')
+        if from_pretrained is not None:
+            logging.info(f"Loading pretrained model from {from_pretrained}")
+            if from_pretrained.endswith('safetensors'):
+                from safetensors.torch import load_file as load_safetensors
+                state_dict = load_safetensors(from_pretrained)
+            else:
+                state_dict = torch.load(from_pretrained, map_location='cpu')
+            if 'state_dict' in state_dict.keys():
+                state_dict = state_dict['state_dict']
+            # if it starts with model, strip it
+            if all([x.startswith('model.') for x in state_dict.keys()]):
+                state_dict = {".".join(k.split(".")[1:]): v for k, v in state_dict.items()}
+            # load state dict
+            self.load_state_dict(state_dict, strict=False)
+
         self.rng = np.random.RandomState(seed)
         # this is to keep track of (top-left) grid locations to sample from for a given image size
         self.grid_locs = dict()
+        
 
     def set_input_tensor(self, input_tensor):
         """See megatron.model.transformer.set_input_tensor()"""
