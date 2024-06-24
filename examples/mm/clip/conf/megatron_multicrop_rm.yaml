@@ -24,7 +24,7 @@ trainer:
 
 exp_manager:
   explicit_log_dir: null
-  exp_dir: null
+  exp_dir: /opt/nemo-aligner/checkpoints/multicrop-rm/${name}
   name: megatron_multicrop_rm
   create_wandb_logger: False
   wandb_logger_kwargs:
