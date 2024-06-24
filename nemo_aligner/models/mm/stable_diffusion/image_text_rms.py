@@ -14,10 +14,12 @@
 
 import numpy as np
 import torch
+from torch import nn
 import torch.nn.functional as F
 from PIL import Image
 from torchvision.transforms import CenterCrop, Compose, InterpolationMode, Normalize, Resize
 import safetensors
+import einops
 
 from megatron.core import parallel_state
 from nemo.collections.multimodal.data.clip.clip_dataset import get_preprocess_fns
@@ -27,6 +29,7 @@ from nemo.collections.multimodal.models.vision_language_foundation.clip.megatron
     MegatronCLIPModel,
 )
 from nemo.collections.multimodal.parts.utils import setup_trainer_and_model_for_inference
+from nemo.collections.nlp.modules.common.megatron.utils import average_losses_across_data_parallel_group
 from nemo.collections.nlp.modules.common.megatron.module import MegatronModule
 from nemo.collections.nlp.modules.common.megatron.transformer import ParallelTransformer
 from nemo.collections.nlp.modules.common.megatron.utils import init_method_normal, scaled_init_method_normal
@@ -34,11 +37,49 @@ from nemo.utils import logging
 from nemo_aligner.data.mm.pickscore_dataset import build_train_valid_datasets
 from open_clip import tokenize
 from transformers import CLIPTokenizer
+import math
+from omegaconf import OmegaConf
 
 BICUBIC = InterpolationMode.BICUBIC
 BILINEAR = InterpolationMode.BILINEAR
 PATCH_SIZE = 224
 PATCH_SIZE2 = PATCH_SIZE//2
+
+def get_idx(end, device):
+    return torch.arange(start=0, end=end, dtype=torch.float32, device=device)
+
+def coordinate_embedding(coordinates, dim, max_period=10000, repeat_only=False, cached_embedding=None):
+    """
+    Create sinusoidal embeddings from integer coordinates.
+
+    Copied from nemo/collections/multimodal/modules/stable_diffusion/diffusionmodules/util.py
+
+    Parameters:
+        coordinates (Tensor): A 1-D tensor of N indices, one per batch element. These indices may be fractional and
+                            represent the timesteps for which embeddings are to be created.
+        dim (int): The dimension of the output embeddings. Each timestep will be represented as a vector of this dimension.
+        max_period (float): Controls the minimum frequency of the embeddings. Higher values result in higher frequency
+                            components in the embedding.
+
+    Returns:
+        Tensor: An [N x dim] tensor of positional embeddings, where each row corresponds to the embedding for a timestep.
+    """
+    if not repeat_only:
+        if cached_embedding is not None:
+            # using cached embedding and lookup in the cache
+            embedding = cached_embedding[coordinates.to(dtype=torch.int), :]
+        else:
+            half = dim // 2
+            idx = get_idx(half, coordinates.device)
+            freqs = torch.exp(-math.log(max_period) / half * idx)
+            args = coordinates[:, None].float() * freqs[None]
+            embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+            if dim % 2:
+                embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+    else:
+        embedding = einops.repeat(coordinates, "b -> b d", d=dim)
+    return embedding
+
 
 class PickscoreRewardModel(MegatronModule):
     """CLIP-Based Model"""
@@ -112,19 +153,43 @@ class PickscoreMultiCropRewardModel(MegatronModule):
 
         # get a bunch of sample resolutions for augmentation
         self.resolutions = model_cfg.get('sample_resolutions', [512, 768, 1024, 1280, 1536, 2048])
+        logging.info(f"Sampling at resolutions {self.resolutions}.")
 
         # attention modules
         # TODO: Add some form of positional encoding to this layer 
-        self.image_patch_transformer = ParallelTransformer(
-            model_parallel_config, 
-            init_method=init_method_normal(sigma), 
-            output_layer_init_method=scaled_init_method_normal(sigma, num_layers),
-            num_layers=num_layers,
-            ffn_hidden_size=model_cfg.output_dim * 4,
-            hidden_size=model_cfg.output_dim,
-            num_attention_heads=attn_cfg.num_attention_heads,
-            precision=model_cfg.precision,
-        )
+        aggregator = model_cfg.get('aggregator', 'transformer')
+        self.aggregator_name = aggregator
+        if aggregator == 'transformer':
+            logging.info("Using transformer aggregator.")
+            self.aggregator = ParallelTransformer(
+                model_parallel_config, 
+                init_method=init_method_normal(sigma), 
+                output_layer_init_method=scaled_init_method_normal(sigma, num_layers),
+                num_layers=num_layers,
+                ffn_hidden_size=model_cfg.output_dim * 4,
+                hidden_size=model_cfg.output_dim * 2,
+                num_attention_heads=attn_cfg.num_attention_heads,
+                precision=model_cfg.precision,
+            )
+            self.final_out = nn.Linear(model_cfg.output_dim * 2, model_cfg.output_dim)
+            # get linear embedder
+            self.linear_embed = nn.Sequential(
+                nn.Linear(model_cfg.output_dim, model_cfg.output_dim * 4),
+                nn.SiLU(),
+                nn.Linear(model_cfg.output_dim * 4, model_cfg.output_dim)
+            )
+            self.out_dim = model_cfg.output_dim
+
+
+        elif aggregator == 'gap':
+            # global average pooling
+            logging.info("Using global average pooling.")
+            self.aggregator = lambda x, *args, **kwargs: x    # aggregator is a no-op because we perform mean later
+            if model_cfg.vision.freeze and model_cfg.text.freeze:
+                assert False, "Need some module to be training when using Global Average Pooling aggregator"
+        else:
+            raise ValueError(f"Invalid aggregator {aggregator}.")
+
         self.logit_scale = torch.nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
         
         ## Load from pretrained clip model
@@ -187,13 +252,14 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             if rng.rand() > 0.05:
                 keep = np.where(rng.rand(grid_locs.shape[0]) < 0.9)[0]
                 grid_locs = grid_locs[keep, :]
-
+        
         # now sample the patches
         image_crops = []
         image_centers = []
+        device = images.device
         for x, y in grid_locs:
             image_crops.append(images[:, :, y:y+PATCH_SIZE, x:x+PATCH_SIZE])
-            image_centers.append(torch.FloatTensor([x + PATCH_SIZE2, y + PATCH_SIZE2]).unsqueeze(0).repeat(b, 1))  # [b, 2]
+            image_centers.append(torch.FloatTensor([x + PATCH_SIZE2, y + PATCH_SIZE2]).unsqueeze(0).repeat(b, 1).to(device))  # [b, 2]
         return image_crops, image_centers
 
     def get_reward(self, images, captions):
@@ -219,19 +285,39 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         encoded_features = []
         for i in range(num_crops):
             with torch.set_grad_enabled(i == grad_idx):
-                encoded_features.append(self.vision_encoder(image_crops[i])[:, None])   # [B, 1, D]
+                encoded_features.append(self.vision_encoder(image_crops[i]))   # [B, D]
         # TODO: feed the image centers into pos encoding
         # concat and feed them to attention
-        encoded_features = self.image_patch_transformer(torch.cat(encoded_features, dim=1), None)   # [B, S, D]
-        image_features = encoded_features.mean(1)
+        image_features = self.aggregate(torch.stack(encoded_features, dim=1), image_centers)
         text_features = self.text_encoder(captions)
-        # rewards = (
-        #     self.logit_scale.exp()
-        #     * torch.matmul(F.normalize(image_features, dim=-1), F.normalize(text_features, dim=-1).t()).diag()
-        # )
         rewards = self.logit_scale.exp() * (F.normalize(image_features, dim=-1) * F.normalize(text_features, dim=-1)).sum(1)   # [B, ]
         return rewards
     
+    def aggregate(self, encoded_features, image_centers):
+        ''' 
+        encoded_features: [B, S, D]
+        image_centers: list of [B,2], [B,2] ... tensors
+
+        use either GAP or transformer aggregation
+        '''
+        if self.aggregator_name == 'gap':
+            image_features = self.aggregator(encoded_features).mean(1)
+        elif self.aggregator_name == 'transformer':
+            t_embed = []
+            for center in image_centers:
+                cx, cy = [center[:, i] for i in range(2)]
+                embed = torch.cat([coordinate_embedding(coord, self.out_dim//2) for coord in [cx, cy]], dim=1)  # [B, out_dim]
+                embed = self.linear_embed(embed)
+                t_embed.append(embed)
+            t_embed = torch.stack(t_embed, dim=1)  # [B, S, D]
+            pos_features = torch.cat([encoded_features, t_embed], dim=2)
+            pos_features = self.aggregator(pos_features, None)    # apply attention without any mask
+            image_features = pos_features.mean(1)
+            image_features = self.final_out(image_features)  # (2D -> D)
+        else:
+            raise ValueError("Invalid aggregation function.")
+        return image_features
+
     def forward(self, images, captions):
         return self.get_reward(images, captions)
 
@@ -337,13 +423,19 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
         labels_s = (labels + 1e-4)
         labels_s = labels_s / labels_s.sum(1, keepdim=True)
         # to balance out the non-zero term for 0.5 case
-        entropy = (labels_s * torch.log(labels_s)).sum(1).mean()
+        entropy = (labels_s * torch.log(labels_s)).sum(1).mean().detach()
         # this is the KL div loss for categorical
         local_loss = -(labels * logsoftmax).sum(1).mean() + entropy
-        # local_loss = F.cross_entropy(logits, labels)
-        # TODO: change this to reduced
-        reduced_loss = local_loss
-        return local_loss, {"loss": reduced_loss}
+        # compute accuracy
+        gt_exists = torch.where(labels.max(1).values > 0.5)[0]
+        logits_masked = torch.argmax(logits, 1)[gt_exists]
+        labels_masked = torch.argmax(labels, 1)[gt_exists]
+        accuracy = torch.mean(1.0*(logits_masked == labels_masked))
+        # compute reduced metrics over parallel group
+        reduced_accuracy = average_losses_across_data_parallel_group([accuracy])
+        reduced_loss = average_losses_across_data_parallel_group([local_loss])
+        
+        return local_loss, {"loss": reduced_loss, "accuracy": reduced_accuracy}
 
     # Override forward-backward function to train
     def get_forward_output_and_loss_func(self):
@@ -450,6 +542,59 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
             else:
                 new_batch[k] = torch.stack([datum[k] for datum in batch], 0)
         return new_batch
+
+
+    def setup_optimizer_param_groups(self):
+        """
+            Megatron CLIP override
+
+            Used to create param groups for the optimizer.
+            As an example, this can be used to specify per-layer learning rates:
+
+            optim.SGD([
+                        {'params': model.base.parameters()},
+                        {'params': model.classifier.parameters(), 'lr': 1e-3}
+                        ], lr=1e-2, momentum=0.9)
+
+            See https://pytorch.org/docs/stable/optim.html for more information.
+            By default, ModelPT will use self.parameters().
+            Override this method to add custom param groups.
+            In the config file, add 'optim_param_groups' to support different LRs
+            for different components (unspecified params will use the default LR):
+
+            model:
+                optim_param_groups:
+                    encoder:
+                        lr: 1e-4
+                        momentum: 0.8
+                    decoder:
+                        lr: 1e-3
+                optim:
+                    lr: 3e-3
+                    momentum: 0.9
+        """
+        if not hasattr(self, "parameters"):
+            self._optimizer_param_groups = None
+            return
+
+        vision_params, text_params, other_params = {'params': []}, {'params': []}, {'params': []}
+        # check for which module they belong to
+        for n, p in self.named_parameters():
+            if n.startswith('vision_encoder.'):
+                vision_params['params'].append(p)
+            elif n.startswith('text_encoder.'):
+                text_params['params'].append(p)
+            else:
+                other_params['params'].append(p)
+
+        # for finetuning, we may have provided extra params
+        if self.cfg.vision.get('extra_optim_params'):
+            vision_params.update(OmegaConf.to_container(self.cfg.vision.extra_optim_params))
+        if self.cfg.text.get('extra_optim_params'):
+            text_params.update(OmegaConf.to_container(self.cfg.text.extra_optim_params))
+        
+        self._optimizer_param_groups = [vision_params, text_params, other_params]
+        
 
 
 def get_reward_model(cfg, mbs, gbs):

@@ -96,7 +96,7 @@ class PickScoreDataset(Dataset):
         # create custom image transform 
         # this is the default behavior, simply convert to tensor and normalize
         if model_cfg.data.get('no_crop_images', True):
-            logging.info("Creating custom image transform that does not crop images.")
+            logging.info("Creating custom image transform that does not resize images to 224x224.")
             self.image_transform = Compose([
                 ToTensor(),
                 Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD)]

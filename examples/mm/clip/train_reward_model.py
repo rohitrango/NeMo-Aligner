@@ -25,7 +25,7 @@ from nemo_aligner.models.mm.stable_diffusion.image_text_rms import MegatronCLIPM
 
 # mp.set_start_method("spawn", force=True)
 
-@hydra_runner(config_path="conf", config_name="megatron_multicrop_rm")
+@hydra_runner(config_path="conf", config_name="megatron_multicrop_rm_gap")
 def main(cfg) -> None:
     logging.info("\n\n************** Experiment configuration ***********")
     logging.info(f'\n{OmegaConf.to_yaml(cfg)}')

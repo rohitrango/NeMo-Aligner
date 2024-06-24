@@ -74,6 +74,9 @@ model:
     sigma: 0.02
     num_layers: 2
     num_attention_heads: 8
+  
+  aggregator: transformer
+  sample_resolutions: [512, 768, 1024]      # which resolutions to sample from
 
   vision:
     precision: 32
@@ -91,6 +94,9 @@ model:
     class_token_length: 1
     preprocess_layernorm: True # apply layer norm to embedded tokens
     freeze: False
+
+    extra_optim_params:
+      lr: 3e-6
 
     # model architecture
     encoder_seq_length: 196
@@ -143,6 +149,9 @@ model:
     # text configs
     output_dim: ${model.output_dim}
     freeze: False
+
+    extra_optim_params:
+      lr: 3e-6
 
     # model architecture
     encoder_seq_length: 77
@@ -240,27 +249,15 @@ model:
     ranks: [ 0 ] # Global rank IDs to profile
     gen_shape: False # Generate model and kernel details including input shapes
 
-  # optim:
-  #   name: fused_adam
-  #   lr: 1e-3
-  #   weight_decay: 0.2
-  #   betas:
-  #     - 0.9
-  #     - 0.98
-  #   sched:
-  #     name: CosineAnnealing
-  #     warmup_steps: 2000
-  #     constant_steps: 0
-  #     min_lr: 1e-5
   optim:
     name: fused_adam
     lr: 1e-4
-    weight_decay: 1e-5
+    weight_decay: 0
     betas:
       - 0.9
       - 0.99
     sched:
       name: CosineAnnealing
-      warmup_steps: 300
+      warmup_steps: 500
       constant_steps: 0
       min_lr: 1e-5
