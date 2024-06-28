@@ -139,6 +139,8 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         attn_cfg = model_cfg.image_patch_attn
         sigma = attn_cfg.get('sigma', 0.02)
         num_layers = attn_cfg.get('num_layers', 2)
+        # save the model cfg for later
+        self.model_cfg = model_cfg
 
         # check for frozen
         if model_cfg.vision.freeze:
@@ -180,7 +182,6 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             )
             self.out_dim = model_cfg.output_dim
 
-
         elif aggregator == 'gap':
             # global average pooling
             logging.info("Using global average pooling.")
@@ -221,7 +222,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         pass
 
     def create_grid_locs(self, H, W):
-        ''' given height and width, sample top-left locations to '''
+        ''' given height and width, sample top-left locations to crop from '''
         locs = []
         for l in range(0, W, PATCH_SIZE):
             l_correct = l - max(0, l + PATCH_SIZE - W)
@@ -236,6 +237,10 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         b, c, h, w = images.shape
         rng = self.rng
         patch_size = PATCH_SIZE
+        ## if the image is small enough, just return the center crop
+        if h <= patch_size:
+            return [images], [torch.FloatTensor([h//2, w//2]).unsqueeze(0).repeat(b, 1).to(device)]
+
         # if doesnt exist, create, else use prev assigned
         if self.grid_locs.get((h, w)) is None:
             grid_locs = self.create_grid_locs(h, w)
@@ -580,7 +585,7 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
         vision_params, text_params, other_params = {'params': []}, {'params': []}, {'params': []}
         # check for which module they belong to
         for n, p in self.named_parameters():
-            if n.startswith('vision_encoder.'):
+            if n.startswith('vision_encoder.') or n.startswith('logit_scale'):
                 vision_params['params'].append(p)
             elif n.startswith('text_encoder.'):
                 text_params['params'].append(p)

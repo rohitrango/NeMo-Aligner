@@ -1,6 +1,6 @@
 # An example model that works with this config is "https://huggingface.co/yuvalkirstain/PickScore_v1"
 # this is the GAP (global average pooling) config
-name: megatron_multicrop_rm
+name: megatron_multicrop_rm_gap
 restore_from_path: null # used when starting from a .nemo file
 
 trainer:
@@ -26,7 +26,7 @@ trainer:
 exp_manager:
   explicit_log_dir: null
   exp_dir: /opt/nemo-aligner/checkpoints/multicrop-rm/${name}
-  name: megatron_multicrop_rm
+  name: megatron_multicrop_rm_gap
   create_wandb_logger: False
   wandb_logger_kwargs:
     project: Pickscore-Multicrop

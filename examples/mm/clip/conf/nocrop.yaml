@@ -1,5 +1,6 @@
 # An example model that works with this config is "https://huggingface.co/yuvalkirstain/PickScore_v1"
-name: megatron_multicrop_rm_transformer
+# this is the GAP (global average pooling) config
+name: nocrop
 restore_from_path: null # used when starting from a .nemo file
 
 trainer:
@@ -25,7 +26,7 @@ trainer:
 exp_manager:
   explicit_log_dir: null
   exp_dir: /opt/nemo-aligner/checkpoints/multicrop-rm/${name}
-  name: megatron_multicrop_rm_transformer
+  name: megatron_multicrop_rm_gap
   create_wandb_logger: False
   wandb_logger_kwargs:
     project: Pickscore-Multicrop
@@ -75,8 +76,8 @@ model:
     num_layers: 2
     num_attention_heads: 8
   
-  aggregator: transformer
-  sample_resolutions: [512, 768, 1024]      # which resolutions to sample from
+  aggregator: gap
+  sample_resolutions: [224]      # changing this to sample from 224x224 can only extract one valid patch (i.e the entire image)
 
   vision:
     precision: 32
@@ -94,9 +95,6 @@ model:
     class_token_length: 1
     preprocess_layernorm: True # apply layer norm to embedded tokens
     freeze: False
-
-    extra_optim_params:
-      lr: 3e-6
 
     # model architecture
     encoder_seq_length: 196
@@ -149,9 +147,6 @@ model:
     # text configs
     output_dim: ${model.output_dim}
     freeze: False
-
-    extra_optim_params:
-      lr: 3e-6
 
     # model architecture
     encoder_seq_length: 77
@@ -249,9 +244,21 @@ model:
     ranks: [ 0 ] # Global rank IDs to profile
     gen_shape: False # Generate model and kernel details including input shapes
 
+  # optim:
+  #   name: fused_adam
+  #   lr: 1e-3
+  #   weight_decay: 0.2
+  #   betas:
+  #     - 0.9
+  #     - 0.98
+  #   sched:
+  #     name: CosineAnnealing
+  #     warmup_steps: 2000
+  #     constant_steps: 0
+  #     min_lr: 1e-5
   optim:
     name: fused_adam
-    lr: 1e-4
+    lr: 3e-6
     weight_decay: 0
     betas:
       - 0.9
