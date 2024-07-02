@@ -2,19 +2,20 @@
 # this is the GAP (global average pooling) config
 name: nocrop
 restore_from_path: null # used when starting from a .nemo file
+multicrop: True
 
 trainer:
   devices: 1
   num_nodes: 1
   accelerator: gpu
-  precision: 16
+  precision: bf16
   logger: False # logger provided by exp_manager
   enable_checkpointing: False
   use_distributed_sampler: False
   max_epochs: -1 # PTL default. In practice, max_steps will be reached first.
-  max_steps: 375000 # consumed_samples = global_step * micro_batch_size * data_parallel_size * accumulate_grad_batches
+  max_steps: 4000 # consumed_samples = global_step * micro_batch_size * data_parallel_size * accumulate_grad_batches
   log_every_n_steps: 10
-  val_check_interval: 100
+  val_check_interval: 200
   check_val_every_n_epoch: null
   limit_val_batches: 50
   limit_test_batches: 500
@@ -54,8 +55,8 @@ model:
   precision: 32
   # specify micro_batch_size, global_batch_size, and model parallelism
   # gradient accumulation will be done automatically based on data_parallel_size
-  micro_batch_size: 24 # limited by GPU memory
-  global_batch_size: 32 # will use more micro batches to reach global batch size
+  micro_batch_size: 16 # limited by GPU memory
+  global_batch_size: 16 # will use more micro batches to reach global batch size
   tensor_model_parallel_size: 1 # intra-layer model parallelism
   pipeline_model_parallel_size: 1 # inter-layer model parallelism
   virtual_pipeline_model_parallel_size: null # interleaved pipeline
@@ -78,6 +79,7 @@ model:
   
   aggregator: gap
   sample_resolutions: [224]      # changing this to sample from 224x224 can only extract one valid patch (i.e the entire image)
+  test_time_resolution: 224
 
   vision:
     precision: 32
@@ -219,7 +221,8 @@ model:
 
   tokenizer:
     library: 'huggingface'
-    type: 'openai/clip-vit-large-patch14'
+    type: 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
+    # type: 'openai/clip-vit-large-patch14'
     model: null
     vocab_file: null
     merge_file: null
@@ -259,12 +262,13 @@ model:
   optim:
     name: fused_adam
     lr: 3e-6
-    weight_decay: 0
+    weight_decay: 0.01
     betas:
       - 0.9
-      - 0.99
+      - 0.999
     sched:
-      name: CosineAnnealing
+      name: PolynomialDecayAnnealing
       warmup_steps: 500
-      constant_steps: 0
-      min_lr: 1e-6
+      power: 1.0
+      min_lr: 0
+

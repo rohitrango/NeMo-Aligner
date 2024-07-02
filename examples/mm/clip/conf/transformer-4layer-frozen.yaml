@@ -1,0 +1,29 @@
+# An example model that works with this config is "https://huggingface.co/yuvalkirstain/PickScore_v1"
+defaults:
+  - megatron_multicrop_rm_transformer
+
+name: megatron_multicrop_rm_transformer_4layer_frozen
+
+trainer:
+  max_steps: 25000
+  val_check_interval: 200
+  precision: 32
+
+model:
+  micro_batch_size: 24
+  image_patch_attn:
+    num_layers: 4
+    num_attention_heads: 8
+    num_crops_grad: 16
+  vision:
+    freeze: True
+  text:
+    freeze: True
+  data:
+    num_workers: 8
+  optim:
+    sched:
+      name: PolynomialDecayAnnealing
+      warmup_steps: 500
+      power: 1.0
+      min_lr: 0

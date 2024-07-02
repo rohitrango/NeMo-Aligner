@@ -2,6 +2,7 @@
 # this is the GAP (global average pooling) config
 name: megatron_multicrop_rm_gap
 restore_from_path: null # used when starting from a .nemo file
+multicrop: True
 
 trainer:
   devices: 1
@@ -259,7 +260,7 @@ model:
   optim:
     name: fused_adam
     lr: 3e-6
-    weight_decay: 0
+    weight_decay: 0.01
     betas:
       - 0.9
       - 0.99

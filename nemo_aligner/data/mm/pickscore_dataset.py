@@ -36,7 +36,7 @@ OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
 OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
 def build_train_valid_datasets(
-    model_cfg, consumed_samples, tokenizer=None, seed=None,
+    model_cfg, consumed_samples, tokenizer=None, seed=None, return_test_data=False,
 ):
     train_data = PickScoreDataset(
         model_cfg,
@@ -54,6 +54,16 @@ def build_train_valid_datasets(
         seed=seed,
     )
 
+    if return_test_data:
+        test_data = PickScoreDataset(
+            model_cfg,
+            tokenizer=tokenizer,
+            consumed_samples=consumed_samples,
+            split='test',
+            seed=seed,
+        )
+        return train_data, val_data, test_data
+
     # TODO: Add test data
     return train_data, val_data
 
@@ -62,7 +72,7 @@ class PickScoreDataset(Dataset):
     def __init__(
         self,
         model_cfg,
-        tokenizer,
+        tokenizer = None,
         stop_idx = None,
         consumed_samples = 0,
         path = None,
@@ -75,7 +85,7 @@ class PickScoreDataset(Dataset):
         self.tokenizer = tokenizer
         assert split in ("train", "val", "test")
         # self.split = split
-        self.split_path = {"train": "train", "val": "validation", "test": "test"}[split]
+        self.split_path = {"train": "train", "val": "validation_unique", "test": "test_unique"}[split]
         self.path = path or model_cfg.data.get('data_path')
         # lazy load all datasets
         from os import path as osp
@@ -91,19 +101,20 @@ class PickScoreDataset(Dataset):
             np_rng = np.random.RandomState(seed=seed)
             np_rng.shuffle(self.shuffled_indices)
         
+        #### Todo: DO NOT preprocess the image and text from the dataset
         # Get image and text transforms
-        image_transform, self.text_transform = get_preprocess_fns(self.model_cfg, tokenizer = self.tokenizer, is_train=split == 'train')
+        # image_transform, self.text_transform = get_preprocess_fns(self.model_cfg, tokenizer = self.tokenizer, is_train=split == 'train')
         # create custom image transform 
         # this is the default behavior, simply convert to tensor and normalize
-        if model_cfg.data.get('no_crop_images', True):
-            logging.info("Creating custom image transform that does not resize images to 224x224.")
-            self.image_transform = Compose([
-                ToTensor(),
-                Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD)]
-            )
-        else:
-            logging.info("Using default CLIP image transform.")
-            self.image_transform = image_transform
+        # if model_cfg.data.get('no_crop_images', True):
+        #     logging.info("Creating custom image transform that does not resize images to 224x224.")
+        #     self.image_transform = Compose([
+        #         ToTensor(),
+        #         Normalize(mean=OPENAI_DATASET_MEAN, std=OPENAI_DATASET_STD)]
+        #     )
+        # else:
+        #     logging.info("Using default CLIP image transform.")
+        #     self.image_transform = image_transform
 
 
     def __len__(self) -> int:
@@ -117,8 +128,7 @@ class PickScoreDataset(Dataset):
         label = torch.FloatTensor([df['label_0'], df['label_1']])     # preference label
         text = df['caption']
 
-        img_0, img_1 = self.image_transform(img_0), self.image_transform(img_1)
-        text = self.text_transform(text)
+        img_0, img_1 = torch.FloatTensor(np.array(img_0)), torch.FloatTensor(np.array(img_1))
 
         output = {
             'img_0': img_0,
@@ -134,7 +144,6 @@ if __name__ == '__main__':
     from open_clip import tokenizer
     from omegaconf import OmegaConf
     cfg = {
-        'no_crop_images': True,
         'vision': {
             'img_w': 224,
             'img_h': 224,
@@ -144,10 +153,12 @@ if __name__ == '__main__':
         'text': {
             'max_position_embeddings': 77,
         },
-        'data_path': '/opt/nemo-aligner/datasets/pickscore', 
+        'data': {
+            'data_path': '/opt/nemo-aligner/datasets/pickapic', 
+        }
     }
     cfg = OmegaConf.create(cfg)
-    dataset = PickScoreDataset(cfg, tokenizer=None, split='train')
+    dataset = PickScoreDataset(cfg, tokenizer=None, split='val')
     print(len(dataset))
     for i in range(10):
         batch = dataset[i]
@@ -156,4 +167,6 @@ if __name__ == '__main__':
                 print(k, v)
             else:
                 print(k, v.shape)
+                if 'img' in k:
+                    print(v.max(), v.min())
         print()

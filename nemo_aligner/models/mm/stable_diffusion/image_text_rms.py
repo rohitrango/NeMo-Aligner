@@ -117,6 +117,58 @@ class PickscoreRewardModel(MegatronModule):
 
         return rewards
 
+class MegatronCLIPRewardModel(MegatronCLIPModel):
+    def __init__(self, cfg, trainer):
+        super().__init__(cfg, trainer)
+        self.openai_dataset_mean = (0.48145466, 0.4578275, 0.40821073)
+        self.openai_dataset_std = (0.26862954, 0.26130258, 0.27577711)
+        self.transform_size = 224
+        self.rescale_param = 0.00392156862745098
+        self.differentiable_preprocess = self.diff_preprocess()
+
+    def diff_preprocess(self):
+        return Compose(
+            [
+                Resize(self.transform_size, interpolation=BICUBIC, antialias=True),
+                CenterCrop(self.transform_size),
+                self.rescale,
+                Normalize(self.openai_dataset_mean, self.openai_dataset_std),
+            ]
+        )
+
+    def rescale(self, image):
+        return image * self.rescale_param
+
+    def preprocess(self, images, captions):
+        _, text_transform = get_preprocess_fns(self.cfg, tokenizer=self.tokenizer, is_train=False)
+
+        images = (
+            torch.stack([self.differentiable_preprocess(img.permute(2, 0, 1)) for img in images])
+            .to(torch.cuda.current_device())
+            .float()
+        )
+
+        captions_list = [text_transform(captions[i]) for i in range(images.shape[0])]
+
+        captions = torch.stack(captions_list).to(torch.cuda.current_device())
+
+        return images, captions
+
+    def get_reward(self, images, captions):
+        images, captions = self.preprocess(images, captions)
+        return self.model.get_reward(images, captions)
+
+    def model_provider_func(self, pre_process, post_process):
+        """Model depends on pipeline paralellism."""
+        model = PickscoreRewardModel(
+            model_cfg=self.cfg,
+            model_parallel_config=self.model_parallel_config,
+            padded_vocab_size=self.padded_vocab_size,
+            pre_process=pre_process,
+            post_process=post_process,
+        )
+        return model
+
 class PickscoreMultiCropRewardModel(MegatronModule):
     """ CLIP-Based Model but supports multicrop since original CLIP model only supports 224x224 images """
 
@@ -139,6 +191,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         attn_cfg = model_cfg.image_patch_attn
         sigma = attn_cfg.get('sigma', 0.02)
         num_layers = attn_cfg.get('num_layers', 2)
+        self.num_crops_grad = attn_cfg.get("num_crops_grad", 1)
         # save the model cfg for later
         self.model_cfg = model_cfg
 
@@ -155,7 +208,9 @@ class PickscoreMultiCropRewardModel(MegatronModule):
 
         # get a bunch of sample resolutions for augmentation
         self.resolutions = model_cfg.get('sample_resolutions', [512, 768, 1024, 1280, 1536, 2048])
+        self.test_time_resolution = model_cfg.get('test_time_resolution', None)
         logging.info(f"Sampling at resolutions {self.resolutions}.")
+        logging.info(f"Test time resolution set to {self.test_time_resolution}")
 
         # attention modules
         # TODO: Add some form of positional encoding to this layer 
@@ -168,7 +223,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
                 init_method=init_method_normal(sigma), 
                 output_layer_init_method=scaled_init_method_normal(sigma, num_layers),
                 num_layers=num_layers,
-                ffn_hidden_size=model_cfg.output_dim * 4,
+                ffn_hidden_size=model_cfg.output_dim * 8,
                 hidden_size=model_cfg.output_dim * 2,
                 num_attention_heads=attn_cfg.num_attention_heads,
                 precision=model_cfg.precision,
@@ -208,6 +263,17 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             # if it starts with model, strip it
             if all([x.startswith('model.') for x in state_dict.keys()]):
                 state_dict = {".".join(k.split(".")[1:]): v for k, v in state_dict.items()}
+            # check loaded models
+            loaded_keys = list(state_dict.keys())
+            expected_keys = list(self.state_dict().keys())
+            # missing and unexpected keys
+            missing_keys = list(set(expected_keys) - set(loaded_keys))
+            # unexpected_keys = list(set(loaded_keys) - set(expected_keys))
+            if len(missing_keys) > 0 and (any([x.startswith("vision_encoder") for x in missing_keys]) or any([x.startswith("text_encoder") for x in missing_keys])):
+                logging.warning(f"there are missing keys: {missing_keys}.")
+            else:
+                logging.info("there are no missing keys")
+
             # load state dict
             self.load_state_dict(state_dict, strict=False)
 
@@ -237,6 +303,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         b, c, h, w = images.shape
         rng = self.rng
         patch_size = PATCH_SIZE
+        device = images.device
         ## if the image is small enough, just return the center crop
         if h <= patch_size:
             return [images], [torch.FloatTensor([h//2, w//2]).unsqueeze(0).repeat(b, 1).to(device)]
@@ -261,21 +328,24 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         # now sample the patches
         image_crops = []
         image_centers = []
-        device = images.device
         for x, y in grid_locs:
             image_crops.append(images[:, :, y:y+PATCH_SIZE, x:x+PATCH_SIZE])
             image_centers.append(torch.FloatTensor([x + PATCH_SIZE2, y + PATCH_SIZE2]).unsqueeze(0).repeat(b, 1).to(device))  # [b, 2]
         return image_crops, image_centers
 
-    def get_reward(self, images, captions):
+    def get_reward(self, images, captions,):
         # images have to be resized, sample interpolation strategy and resolution
         # images   = list of tensors of size [3, H_i, W_i]
-        # captions = list of text
+        # captions = tokenized text
         if self.training:
             res = int(self.rng.choice(self.resolutions))
             interp = ([BILINEAR, BICUBIC])[int(np.random.randint(2))]
         else:
-            res = int(max([x.shape[-1] for x in images]))
+            # if there is a test-time resolution, use that
+            if self.test_time_resolution is not None:
+                res = self.test_time_resolution
+            else:
+                res = int(max([x.shape[-1] for x in images]))
             interp = BICUBIC
 
         # resample images 
@@ -286,10 +356,11 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         image_crops, image_centers = self.get_image_crops(images)  # bchw --> list [bch'w', bch'w' ....] , and list [B2, B2, ...] containing (cx, cy)
         num_crops = len(image_crops)
         ### select one crop to pass gradients through
-        grad_idx = self.rng.randint(num_crops)
+        # grad_idx = self.rng.randint(num_crops)
+        grad_idx = self.rng.permutation(num_crops)[:self.num_crops_grad]
         encoded_features = []
         for i in range(num_crops):
-            with torch.set_grad_enabled(i == grad_idx):
+            with torch.set_grad_enabled(i in grad_idx):
                 encoded_features.append(self.vision_encoder(image_crops[i]))   # [B, D]
         # TODO: feed the image centers into pos encoding
         # concat and feed them to attention
@@ -326,76 +397,33 @@ class PickscoreMultiCropRewardModel(MegatronModule):
     def forward(self, images, captions):
         return self.get_reward(images, captions)
 
-class MegatronCLIPRewardModel(MegatronCLIPModel):
+
+class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
     def __init__(self, cfg, trainer):
         super().__init__(cfg, trainer)
         self.openai_dataset_mean = (0.48145466, 0.4578275, 0.40821073)
         self.openai_dataset_std = (0.26862954, 0.26130258, 0.27577711)
         self.transform_size = 224
-        self.rescale_param = 0.00392156862745098
+        self.rescale_param = 0.00392156862745098   # we dont need this, as we assume the dataloader performs the preprocessing to openai mean/std 
         self.differentiable_preprocess = self.diff_preprocess()
+        _, self.text_transform = get_preprocess_fns(self.cfg, tokenizer=self.tokenizer, is_train=False) 
+
+    def rescale(self, image):
+        return image * self.rescale_param
 
     def diff_preprocess(self):
-
         return Compose(
             [
-                Resize(self.transform_size, interpolation=BICUBIC, antialias=True),
-                CenterCrop(self.transform_size),
                 self.rescale,
                 Normalize(self.openai_dataset_mean, self.openai_dataset_std),
             ]
         )
 
-    def rescale(self, image):
-        return image * self.rescale_param
-
     def preprocess(self, images, captions):
-
-        _, text_transform = get_preprocess_fns(self.cfg, tokenizer=self.tokenizer, is_train=False)
-
-        images = (
-            torch.stack([self.differentiable_preprocess(img.permute(2, 0, 1)) for img in images])
-            .to(torch.cuda.current_device())
-            .float()
-        )
-
-        captions_list = [text_transform(captions[i]) for i in range(images.shape[0])]
-
+        text_transform = self.text_transform
+        images = [self.differentiable_preprocess(img.permute(2, 0, 1)).to(torch.cuda.current_device()).float() for img in images]
+        captions_list = [text_transform(captions[i]) for i in range(len(images))]
         captions = torch.stack(captions_list).to(torch.cuda.current_device())
-
-        return images, captions
-
-    def get_reward(self, images, captions):
-        images, captions = self.preprocess(images, captions)
-        return self.model.get_reward(images, captions)
-
-    def model_provider_func(self, pre_process, post_process):
-        """Model depends on pipeline paralellism."""
-        model = PickscoreRewardModel(
-            model_cfg=self.cfg,
-            model_parallel_config=self.model_parallel_config,
-            padded_vocab_size=self.padded_vocab_size,
-            pre_process=pre_process,
-            post_process=post_process,
-        )
-        return model
-    
-class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
-    def __init__(self, cfg, trainer):
-        self.tokenizer = None
-        super().__init__(cfg, trainer)
-        self.openai_dataset_mean = (0.48145466, 0.4578275, 0.40821073)
-        self.openai_dataset_std = (0.26862954, 0.26130258, 0.27577711)
-        self.transform_size = 224
-        # self.rescale_param = 0.00392156862745098   # we dont need this, as we assume the dataloader performs the preprocessing to openai mean/std 
-
-    def preprocess(self, images, captions):
-        # simply use openclip tokenizer which takes a list of strings and processes them into captions
-        text_transform = tokenize
-        images = [x.to(torch.cuda.current_device()).float() for x in images]
-        captions = tokenize(captions).to(torch.cuda.current_device())
-        # captions_list = [text_transform(captions[i]) for i in range(len(captions))]
-        # captions = torch.stack(captions_list).to(torch.cuda.current_device())
         return images, captions
 
     def get_reward(self, images, captions):
@@ -414,7 +442,7 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
         return model
     
     def forward(self, images, captions):
-        rewards = self.model(images, captions)
+        rewards = self.get_reward(images, captions)
         return rewards
     
     def loss_func(self, output_tensor):
@@ -450,7 +478,7 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
                 # load images and caption
                 img_0, img_1 = batch['img_0'], batch['img_1']
                 img_0, img_1 = [x.to(torch.cuda.current_device()) for x in img_0], [x.to(torch.cuda.current_device()) for x in img_1]
-                captions = batch['prompt'].to(img_0[0].device)
+                captions = batch['prompt']
             else:
                 raise NotImplementedError
                 if parallel_state.is_pipeline_first_stage():
@@ -461,9 +489,8 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
                     # Intermediate / Last pipeline stage doesn't need any inputs
                     img_0, img_1, captions = None, None, None
 
-            # output_tensor = model(images, captions)
-            reward_0 = model(img_0, captions)
-            reward_1 = model(img_1, captions)
+            reward_0 = self(img_0, captions)
+            reward_1 = self(img_1, captions)
             output_tensor = (reward_0, reward_1, batch['label'].to(torch.cuda.current_device()))
             return output_tensor, self.loss_func
         return fwd_output_and_loss_func
