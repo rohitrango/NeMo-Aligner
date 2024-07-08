@@ -53,7 +53,7 @@ if [ ! -z "${MULTICROP}" ]; then
     RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr/checkpoints/pickscore_multicrop.nemo"
     MULTICROP="rm.multicrop=True"
 else
-    echo "Using single model"
+    echo "Using base pickscore model"
     RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
 fi
 

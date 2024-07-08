@@ -204,6 +204,91 @@ class MegatronSDDRaFTPModel(MegatronLatentDiffusion, SupervisedInterface):
             captions.append("SD: " + prompts[i] + ", Reward = " + str(reward_init[i]))
 
         return vae_decoder_output_draft_p, images, captions
+    
+    @torch.no_grad()
+    def annealed_guidance(self, batch, x_T, weighing_fn=None):
+        ''' this function tries to perform sampling with a modified score function at each step which is an average
+         of the base model and the trained model '''
+        if weighing_fn is None:
+            weighing_fn = lambda sigma1, sigma2, i, total: i*1.0/total
+
+        with torch.cuda.amp.autocast(
+            enabled=self.autocast_dtype in (torch.half, torch.bfloat16), dtype=self.autocast_dtype,
+        ):
+            batch_size = len(batch)
+            prev_img_draft_p = x_T
+
+            device_draft_p = self.model.betas.device
+
+            sampler_draft_p = sampling_utils.initialize_sampler(self.model, self.sampler_type.upper())
+            sampler_init = sampling_utils.initialize_sampler(self.init_model, self.sampler_type.upper())
+
+            cond, u_cond = sampling_utils.encode_prompt(
+                self.model.cond_stage_model, batch, self.unconditional_guidance_scale
+            )
+
+            sampler_draft_p.make_schedule(ddim_num_steps=self.inference_steps, ddim_eta=self.eta, verbose=False)
+            sampler_init.make_schedule(ddim_num_steps=self.inference_steps, ddim_eta=self.eta, verbose=False)
+
+            timesteps = sampler_draft_p.ddim_timesteps
+
+            time_range = np.flip(timesteps)
+            total_steps = timesteps.shape[0]
+
+            iterator = tqdm(time_range, desc=f"{sampler_draft_p.sampler.name} Sampler", total=total_steps)
+
+            list_eps_draft_p = []
+            list_eps_init = []
+            truncation_steps = self.cfg.truncation_steps
+
+            denoise_step_kwargs = {
+                "unconditional_guidance_scale": self.unconditional_guidance_scale,
+                "unconditional_conditioning": u_cond,
+            }
+            for i, step in enumerate(iterator):
+
+                denoise_step_args = [total_steps, i, batch_size, device_draft_p, step, cond]
+
+                if i < total_steps - truncation_steps:
+                    with torch.no_grad():
+                        img_draft_p, pred_x0_draft_p, eps_t_draft_p = sampler_draft_p.single_ddim_denoise_step(
+                            prev_img_draft_p, *denoise_step_args, **denoise_step_kwargs
+                        )
+
+                        prev_img_draft_p = img_draft_p
+                else:
+
+                    img_draft_p, pred_x0_draft_p, eps_t_draft_p = sampler_draft_p.single_ddim_denoise_step(
+                        prev_img_draft_p, *denoise_step_args, **denoise_step_kwargs
+                    )
+                    list_eps_draft_p.append(eps_t_draft_p)
+
+                    with torch.no_grad():
+                        _, _, eps_t_init = sampler_init.single_ddim_denoise_step(
+                            prev_img_draft_p, *denoise_step_args, **denoise_step_kwargs
+                        )
+                        list_eps_init.append(eps_t_init)
+
+                    prev_img_draft_p = img_draft_p
+
+            last_states = [pred_x0_draft_p]
+
+            trajectories_predx0 = (
+                torch.stack(last_states, dim=0).transpose(0, 1).contiguous().view(-1, *last_states[0].shape[1:])
+            )
+            t_eps_draft_p = torch.stack(list_eps_draft_p).to(torch.device("cuda"))
+            t_eps_init = torch.stack(list_eps_init).to(torch.device("cuda"))
+
+            vae_decoder_output = []
+            for i in range(0, batch_size, self.vae_batch_size):
+                image = self.model.differentiable_decode_first_stage(trajectories_predx0[i : i + self.vae_batch_size])
+                vae_decoder_output.append(image)
+
+            vae_decoder_output = torch.cat(vae_decoder_output, dim=0)
+            vae_decoder_output = torch.clip((vae_decoder_output + 1) / 2, 0, 1) * 255.0
+
+            return vae_decoder_output, t_eps_draft_p, t_eps_init
+
 
     def generate(
         self, batch, x_T,

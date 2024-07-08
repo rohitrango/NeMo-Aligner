@@ -22,6 +22,8 @@ from copy import deepcopy
 import os
 from functools import partial
 from torch import nn
+from megatron.core.tensor_parallel.random import get_cuda_rng_tracker, get_data_parallel_rng_tracker_name
+from PIL import Image
 
 # from nemo.collections.nlp.parts.megatron_trainer_builder import MegatronStableDiffusionTrainerBuilder
 from nemo.collections.nlp.parts.peft_config import PEFT_CONFIG_MAP
@@ -121,6 +123,9 @@ def main(cfg) -> None:
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(local_rank)
 
+    # turn off wandb logging
+    cfg.exp_manager.create_wandb_logger = False
+
     # TODO: has to be set true for PyTorch 1.12 and later.
     torch.backends.cuda.matmul.allow_tf32 = True
     cfg.model.data.train.dataset_path = [cfg.model.data.webdataset.local_root_path for _ in range(cfg.trainer.devices * cfg.trainer.num_nodes)]
@@ -134,9 +139,6 @@ def main(cfg) -> None:
     # Instatiating the model here
     ptl_model = MegatronSDXLDRaFTPModel(cfg.model, trainer).to(torch.cuda.current_device())
     init_peft(ptl_model, cfg.model)   # init peft 
-
-    reward_model = get_reward_model(cfg.rm, mbs=cfg.model.micro_batch_size, gbs=cfg.model.global_batch_size).to(torch.cuda.current_device())
-    ptl_model.reward_model = reward_model
 
     trainer_restore_path = trainer.ckpt_path
 
@@ -190,10 +192,6 @@ def main(cfg) -> None:
 
     logger.log_hyperparams(OmegaConf.to_container(cfg))
 
-    if local_rank == 0:
-        print(ptl_model)
-        # import time
-        # time.sleep(10)
     torch.distributed.barrier()
 
     ckpt_callback = add_custom_checkpoint_callback(trainer, ptl_model)
@@ -217,8 +215,34 @@ def main(cfg) -> None:
         draft_p_trainer.load_state_dict(custom_trainer_state_dict)
 
     torch.cuda.empty_cache()
-    draft_p_trainer.fit()
+    global_idx = 0
+    for batch in val_dataloader:
+        batch_size = len(batch)
+        with get_cuda_rng_tracker().fork(get_data_parallel_rng_tracker_name()):
+            latents = torch.randn(
+                [
+                    batch_size,
+                    ptl_model.in_channels,
+                    ptl_model.height // ptl_model.downsampling_factor,
+                    ptl_model.width // ptl_model.downsampling_factor,
+                ],
+                generator=None,
+            ).to(torch.cuda.current_device())
+        images = ptl_model.annealed_guidance(batch, latents)
+        images = images.permute(0, 2, 3, 1).detach().cpu().numpy()
+        # save to pil
+        for i in range(batch_size):
+            i = i + global_idx
+            img_path = f"annealed_outputs/img_{i:05d}_{local_rank:02d}.png"
+            prompt_path = f"annealed_outputs/prompt_{i:05d}_{local_rank:02d}.txt"
+            Image.fromarray(images[i]).save(img_path)
+            with open(prompt_path, "w") as fi:
+                fi.write(batch[i])
+        # increment global index
+        global_idx += batch_size
+        
 
+        
 
 
 if __name__ == "__main__":
