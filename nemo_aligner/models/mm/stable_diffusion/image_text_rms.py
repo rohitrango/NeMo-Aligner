@@ -194,6 +194,8 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         self.num_crops_grad = attn_cfg.get("num_crops_grad", 1)
         # save the model cfg for later
         self.model_cfg = model_cfg
+        self.add_global_image_context = attn_cfg.get('add_global_image_context', False)
+        logging.info("Adding global context to the image encoding.")
 
         # check for frozen
         if model_cfg.vision.freeze:
@@ -337,6 +339,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         # images have to be resized, sample interpolation strategy and resolution
         # images   = list of tensors of size [3, H_i, W_i]
         # captions = tokenized text
+        image_list = images
         if self.training:
             res = int(self.rng.choice(self.resolutions))
             interp = ([BILINEAR, BICUBIC])[int(np.random.randint(2))]
@@ -365,6 +368,14 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         # TODO: feed the image centers into pos encoding
         # concat and feed them to attention
         image_features = self.aggregate(torch.stack(encoded_features, dim=1), image_centers)
+        # add global context (i.e. entire image if provided)
+        if self.add_global_image_context:
+            ctx_transform = Resize(PATCH_SIZE, interpolation=BICUBIC, antialias=True)
+            resized_imgs = [ctx_transform(x) for x in image_list]
+            resized_imgs = torch.stack(resized_imgs, 0)  # [b, c, h, w]
+            global_img_feature = self.vision_encoder(resized_imgs)
+            image_features = image_features + global_img_feature
+
         text_features = self.text_encoder(captions)
         rewards = self.logit_scale.exp() * (F.normalize(image_features, dim=-1) * F.normalize(text_features, dim=-1)).sum(1)   # [B, ]
         return rewards
@@ -396,7 +407,6 @@ class PickscoreMultiCropRewardModel(MegatronModule):
 
     def forward(self, images, captions):
         return self.get_reward(images, captions)
-
 
 class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
     def __init__(self, cfg, trainer):

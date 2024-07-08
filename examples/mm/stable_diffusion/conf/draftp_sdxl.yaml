@@ -278,3 +278,5 @@ rm:
   model:
     restore_from_path:  # Path to a trained ViT .nemo file
     precision: ${trainer.precision}
+  
+  multicrop: False    # set to true for multicrop reward models

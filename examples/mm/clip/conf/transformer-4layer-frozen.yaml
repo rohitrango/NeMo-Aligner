@@ -10,11 +10,12 @@ trainer:
   precision: 32
 
 model:
-  micro_batch_size: 24
+  micro_batch_size: 16
   image_patch_attn:
     num_layers: 4
     num_attention_heads: 8
-    num_crops_grad: 16
+    num_crops_grad: 1
+    add_global_image_context: True    # add global context to the full image
   vision:
     freeze: True
   text:
@@ -22,6 +23,7 @@ model:
   data:
     num_workers: 8
   optim:
+    lr: 1e-5        # reduced lr for transformer seems to work better? 
     sched:
       name: PolynomialDecayAnnealing
       warmup_steps: 500
