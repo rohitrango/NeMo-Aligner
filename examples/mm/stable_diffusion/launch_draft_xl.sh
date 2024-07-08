@@ -45,11 +45,17 @@ CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
 UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
-RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
 
 ## if using multicrop model
-# RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr/checkpoints/pickscore_multicrop.nemo"
-# MULTICROP="rm.multicrop=True"
+if [ ! -z "${MULTICROP}" ]; then
+# if exists
+    echo "Using multicrop model"
+    RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr/checkpoints/pickscore_multicrop.nemo"
+    MULTICROP="rm.multicrop=True"
+else
+    echo "Using single model"
+    RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
+fi
 
 DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts_${JOBNAME}
 if [ ! -z "${ACT_CKPT}" ]; then
