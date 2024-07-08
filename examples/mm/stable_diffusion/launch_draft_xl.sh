@@ -16,6 +16,8 @@ else
 	NNODES=""
 fi
 
+pip install decord
+
 echo "Setting nodes to $NNODES"
 LR=${LR:=0.00025}
 INF_STEPS=${INF_STEPS:=25}
@@ -31,6 +33,8 @@ LOG_WANDB=${LOG_WANDB:="True"}
 JOBNAME=${JOBNAME:="dummy"}
 SLEEP=${SLEEP:=0}
 
+echo "additional kwargs: ${ADDITIONAL_KWARGS}"
+
 RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WANDB_NAME=SDXL_DRaFT+${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
@@ -42,6 +46,11 @@ CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
 UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
+
+## if using multicrop model
+# RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr/checkpoints/pickscore_multicrop.nemo"
+# MULTICROP="rm.multicrop=True"
+
 DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sdxl_draft_runs/draftp_xl_saved_ckpts_${JOBNAME}
 if [ ! -z "${ACT_CKPT}" ]; then
     ACT_CKPT="model.activation_checkpointing=$ACT_CKPT "
@@ -70,7 +79,7 @@ export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb 
     model.truncation_steps=1 \
     trainer.draftp_sd.max_epochs=5 \
     trainer.draftp_sd.max_steps=10000 \
-    trainer.draftp_sd.save_interval=20000 \
+    trainer.draftp_sd.save_interval=200 \
     trainer.draftp_sd.val_check_interval=20 \
     trainer.draftp_sd.gradient_clip_val=10.0 \
     model.micro_batch_size=${MICRO_BS} \
@@ -88,8 +97,9 @@ export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb 
     model.unet_config.from_pretrained=${UNET_CKPT} \
     model.unet_config.from_NeMo=True \
     $ACT_CKPT \
+    $MULTICROP \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
-    exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
+    exp_manager.wandb_logger_kwargs.project=${PROJECT} ${ADDITIONAL_KWARGS} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
 

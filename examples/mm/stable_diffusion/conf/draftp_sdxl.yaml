@@ -103,7 +103,7 @@ model:
   capture_cudagraph_iters: -1
   scale_by_std: False
   channels_last: False
-  fsdp: True
+  fsdp: False
   fsdp_set_buffer_dtype: null
   precache_mode: null # [text, both, null]
 

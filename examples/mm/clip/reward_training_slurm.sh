@@ -27,7 +27,7 @@ else
 fi
 
 # change this if using other modes
-export MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:=24}
+export MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:=16}
 
 echo "Running script with additional kwargs $ADDITIONAL_KWARGS"
 
@@ -35,6 +35,4 @@ srun --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqs
     --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm \
     bash /opt/nemo-aligner/examples/mm/clip/reward_training.sh
 
-# torchrun --nproc-per-node=8 $DISTRIBUTED_PARAMS --nnodes=$NNODES /opt/nemo-aligner/examples/mm/clip/train_reward_model.py \
-# model.micro_batch_size=$MICRO_BATCH_SIZE trainer.devices=8 trainer.num_nodes=$NNODES exp_manager.create_wandb_logger=True $ADDITIONAL_KWARGS
 

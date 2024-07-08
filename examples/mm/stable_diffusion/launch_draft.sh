@@ -24,6 +24,8 @@ WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 LOGDIR=${RUN_DIR}/logs
 mkdir -p ${LOGDIR}
 
+pip install decord
+
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME="draftp_sd"
 UNET_CKPT="/opt/nemo-aligner/checkpoints/model_weights.ckpt"
