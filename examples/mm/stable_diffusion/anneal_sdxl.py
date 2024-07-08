@@ -22,6 +22,7 @@ from copy import deepcopy
 import os
 from functools import partial
 from torch import nn
+import numpy as np
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker, get_data_parallel_rng_tracker_name
 from PIL import Image
 
@@ -151,20 +152,11 @@ def main(cfg) -> None:
 
     init_distributed(trainer, ptl_model, cfg.model.get("transformer_engine", False))
 
+    # use the validation ds if needed
     train_ds, validation_ds = text_webdataset.build_train_valid_datasets(
         cfg.model.data, consumed_samples=consumed_samples
     )
-    train_ds = [d["captions"] for d in list(train_ds)]
     validation_ds = [d["captions"] for d in list(validation_ds)]
-
-    train_dataloader = build_dataloader(
-        cfg,
-        dataset=train_ds,
-        consumed_samples=consumed_samples,
-        mbs=cfg.model.micro_batch_size,
-        gbs=cfg.model.global_batch_size,
-        load_gbs=True,
-    )
 
     val_dataloader = build_dataloader(
         cfg,
@@ -174,8 +166,7 @@ def main(cfg) -> None:
         gbs=cfg.model.global_batch_size,
         load_gbs=True,
     )
-
-    init_using_ptl(trainer, ptl_model, train_dataloader, train_ds)
+    init_using_ptl(trainer, ptl_model, val_dataloader, validation_ds)
     
     if cfg.model.get('activation_checkpointing', False):
         # call activation checkpointing here
@@ -202,7 +193,7 @@ def main(cfg) -> None:
         model=ptl_model,
         optimizer=optimizer,
         scheduler=scheduler,
-        train_dataloader=train_dataloader,
+        train_dataloader=val_dataloader,
         val_dataloader=val_dataloader,
         test_dataloader=[],
         logger=logger,
@@ -216,6 +207,33 @@ def main(cfg) -> None:
 
     torch.cuda.empty_cache()
     global_idx = 0
+
+    if cfg.get("prompt") is not None:
+        logging.info(f"Override val dataset with custom prompt: {cfg.prompt}")
+        val_dataloader = [[cfg.prompt]]
+    
+    wt_type = cfg.get("weight_type", None)
+    if wt_type is None:
+        # dummy function that assigns a value of 0 all the time
+        logging.info("using the base model")
+        wt_draft = lambda sigma, sigma_next, i, total: 0
+    else:
+        if wt_type == 'linear':
+            wt_draft = lambda sigma, sigma_next, i, total: i*1.0/total
+        elif wt_type == 'draft':
+            wt_draft = lambda sigma, sigma_next, i, total: 1
+        elif wt_type.startswith('power'):  # its of the form power_{power}
+            pow = float(wt_type.split("_")[1])
+            wt_draft = lambda sigma, sigma_next, i, total: (i*1.0/total)**pow
+        else:
+            raise ValueError(f"invalid weighing type: {wt_type}")
+        logging.info(f"using weighing type for annealed outputs: {wt_type}.")
+
+    # initialize generator
+    gen = torch.Generator(device='cpu')
+    gen.manual_seed((1243 + 1247837 * local_rank)%(int(2**32 - 1)))
+    os.makedirs("./annealed_outputs/", exist_ok=True)
+
     for batch in val_dataloader:
         batch_size = len(batch)
         with get_cuda_rng_tracker().fork(get_data_parallel_rng_tracker_name()):
@@ -226,12 +244,12 @@ def main(cfg) -> None:
                     ptl_model.height // ptl_model.downsampling_factor,
                     ptl_model.width // ptl_model.downsampling_factor,
                 ],
-                generator=None,
+                generator=gen,
             ).to(torch.cuda.current_device())
-        images = ptl_model.annealed_guidance(batch, latents)
-        images = images.permute(0, 2, 3, 1).detach().cpu().numpy()
+        images = ptl_model.annealed_guidance(batch, latents, weighing_fn=wt_draft)
+        images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
         # save to pil
-        for i in range(batch_size):
+        for i in range(images.shape[0]):
             i = i + global_idx
             img_path = f"annealed_outputs/img_{i:05d}_{local_rank:02d}.png"
             prompt_path = f"annealed_outputs/prompt_{i:05d}_{local_rank:02d}.txt"
@@ -240,9 +258,7 @@ def main(cfg) -> None:
                 fi.write(batch[i])
         # increment global index
         global_idx += batch_size
-        
-
-        
+    logging.info("Saved all images.") 
 
 
 if __name__ == "__main__":
