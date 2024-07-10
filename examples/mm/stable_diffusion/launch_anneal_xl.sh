@@ -50,7 +50,6 @@ VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 if [ ! -z "${MULTICROP}" ]; then
 # if exists
     echo "Using multicrop model using $MULTICROP"
-    # RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr/checkpoints/pickscore_multicrop.nemo"
     # RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr_sbd/checkpoints/pickscore_multicrop.nemo"
     RM_CKPT=${MULTICROP}
     MULTICROP="rm.multicrop=True"
@@ -76,7 +75,8 @@ fi
 echo "Setting distributed params to $DISTRIBUTED_PARAMS"
 
 # sleep $SLEEP
-export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 && CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $NNODES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/train_sdxl_draftp.py \
+export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 
+echo CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $NNODES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/anneal_sdxl.py \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \

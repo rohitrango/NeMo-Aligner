@@ -206,59 +206,70 @@ def main(cfg) -> None:
         draft_p_trainer.load_state_dict(custom_trainer_state_dict)
 
     torch.cuda.empty_cache()
-    global_idx = 0
 
     if cfg.get("prompt") is not None:
         logging.info(f"Override val dataset with custom prompt: {cfg.prompt}")
         val_dataloader = [[cfg.prompt]]
     
-    wt_type = cfg.get("weight_type", None)
-    if wt_type is None:
-        # dummy function that assigns a value of 0 all the time
-        logging.info("using the base model")
-        wt_draft = lambda sigma, sigma_next, i, total: 0
+    wt_types = cfg.get("weight_type", None)
+    if wt_types is None:
+        wt_types = ['base', 'draft', 'linear', 'power_2', 'power_4', 'step_0.6']
     else:
-        if wt_type == 'linear':
-            wt_draft = lambda sigma, sigma_next, i, total: i*1.0/total
-        elif wt_type == 'draft':
-            wt_draft = lambda sigma, sigma_next, i, total: 1
-        elif wt_type.startswith('power'):  # its of the form power_{power}
-            pow = float(wt_type.split("_")[1])
-            wt_draft = lambda sigma, sigma_next, i, total: (i*1.0/total)**pow
+        wt_types = [wt_types] if isinstance(wt_types, str) else wt_types
+    logging.info(f"Running on types: {wt_types}")
+
+    # run for all weight types
+    for wt_type in wt_types:
+        global_idx = 0
+        if wt_type is None or wt_type == 'base':
+            # dummy function that assigns a value of 0 all the time
+            logging.info("using the base model")
+            wt_draft = lambda sigma, sigma_next, i, total: 0
         else:
-            raise ValueError(f"invalid weighing type: {wt_type}")
-        logging.info(f"using weighing type for annealed outputs: {wt_type}.")
+            if wt_type == 'linear':
+                wt_draft = lambda sigma, sigma_next, i, total: i*1.0/total
+            elif wt_type == 'draft':
+                wt_draft = lambda sigma, sigma_next, i, total: 1
+            elif wt_type.startswith('power'):  # its of the form power_{power}
+                pow = float(wt_type.split("_")[1])
+                wt_draft = lambda sigma, sigma_next, i, total: (i*1.0/total)**pow
+            elif wt_type.startswith("step"):   # use a step function (step_{p})
+                frac = float(wt_type.split("_")[1])
+                wt_draft = lambda sigma, sigma_next, i, total: float((i*1.0/total) >= frac)
+            else:
+                raise ValueError(f"invalid weighing type: {wt_type}")
+            logging.info(f"using weighing type for annealed outputs: {wt_type}.")
 
-    # initialize generator
-    gen = torch.Generator(device='cpu')
-    gen.manual_seed((1243 + 1247837 * local_rank)%(int(2**32 - 1)))
-    os.makedirs("./annealed_outputs/", exist_ok=True)
+        # initialize generator
+        gen = torch.Generator(device='cpu')
+        gen.manual_seed((1243 + 1247837 * local_rank)%(int(2**32 - 1)))
+        os.makedirs(f"./annealed_outputs_{wt_type}/", exist_ok=True)
 
-    for batch in val_dataloader:
-        batch_size = len(batch)
-        with get_cuda_rng_tracker().fork(get_data_parallel_rng_tracker_name()):
-            latents = torch.randn(
-                [
-                    batch_size,
-                    ptl_model.in_channels,
-                    ptl_model.height // ptl_model.downsampling_factor,
-                    ptl_model.width // ptl_model.downsampling_factor,
-                ],
-                generator=gen,
-            ).to(torch.cuda.current_device())
-        images = ptl_model.annealed_guidance(batch, latents, weighing_fn=wt_draft)
-        images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
-        # save to pil
-        for i in range(images.shape[0]):
-            i = i + global_idx
-            img_path = f"annealed_outputs/img_{i:05d}_{local_rank:02d}.png"
-            prompt_path = f"annealed_outputs/prompt_{i:05d}_{local_rank:02d}.txt"
-            Image.fromarray(images[i]).save(img_path)
-            with open(prompt_path, "w") as fi:
-                fi.write(batch[i])
-        # increment global index
-        global_idx += batch_size
-    logging.info("Saved all images.") 
+        for batch in val_dataloader:
+            batch_size = len(batch)
+            with get_cuda_rng_tracker().fork(get_data_parallel_rng_tracker_name()):
+                latents = torch.randn(
+                    [
+                        batch_size,
+                        ptl_model.in_channels,
+                        ptl_model.height // ptl_model.downsampling_factor,
+                        ptl_model.width // ptl_model.downsampling_factor,
+                    ],
+                    generator=gen,
+                ).to(torch.cuda.current_device())
+            images = ptl_model.annealed_guidance(batch, latents, weighing_fn=wt_draft)
+            images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
+            # save to pil
+            for i in range(images.shape[0]):
+                i = i + global_idx
+                img_path = f"annealed_outputs_{wt_type}/img_{i:05d}_{local_rank:02d}.png"
+                prompt_path = f"annealed_outputs_{wt_type}/prompt_{i:05d}_{local_rank:02d}.txt"
+                Image.fromarray(images[i]).save(img_path)
+                with open(prompt_path, "w") as fi:
+                    fi.write(batch[i])
+            # increment global index
+            global_idx += batch_size
+        logging.info("Saved all images.") 
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ def main(cfg) -> None:
     model = get_reward_model(cfg, cfg.model.micro_batch_size, cfg.model.global_batch_size).cuda()
     model.eval()
     # _, val_ds, test_ds = model.build_train_valid_test_datasets()
-    batch_size = 100
+    batch_size = 250
     # cfg.model.data.data_path = '/opt/nemo-aligner/datasets/pickapic_v1'
     _, val_ds, test_ds = build_train_valid_datasets(cfg.model, 0, return_test_data=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size, drop_last=False, shuffle=False, collate_fn=model.dl_collate_fn,)
