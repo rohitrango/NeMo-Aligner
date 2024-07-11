@@ -87,16 +87,24 @@ class PickScoreDataset(Dataset):
         # self.split = split
         self.split_path = {"train": "train", "val": "validation_unique", "test": "test_unique"}[split]
         self.path = path or model_cfg.data.get('data_path')
+        self.filter_ties = model_cfg.data.get(split, {}).get("filter_ties", False)  # do we want to filter ties
         # lazy load all datasets
         from os import path as osp
         datasets = sorted(list(glob(osp.join(self.path, self.split_path, "*.arrow"))))
         datasets = [Dataset_hf.from_file(x) for x in datasets]
         datasets = concatenate_datasets(datasets)
-        self.df = datasets
         num_rows = datasets.num_rows
-        print(f"*********** Loading {split} dataset containing {num_rows} entries ***********")
-        # shuffle the indices if given
+        # set shuffled indices to the list and then filter if asked to
         self.shuffled_indices = np.arange(num_rows).astype(np.int32)
+        if self.filter_ties:
+            logging.info(f"Filtering ties from {split} split.")
+            det_label = np.logical_or(np.array(datasets['label_0']) == 1, np.array(datasets['label_1']) == 1)
+            det_label = np.where(det_label)[0]
+            self.shuffled_indices = det_label
+
+        self.df = datasets
+        print(f"*********** Loading {split} dataset containing {len(self.shuffled_indices)} entries ***********")
+        # shuffle the indices if given
         if seed is not None:
             np_rng = np.random.RandomState(seed=seed)
             np_rng.shuffle(self.shuffled_indices)
@@ -115,7 +123,6 @@ class PickScoreDataset(Dataset):
         # else:
         #     logging.info("Using default CLIP image transform.")
         #     self.image_transform = image_transform
-
 
     def __len__(self) -> int:
            return len(self.shuffled_indices)

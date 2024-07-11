@@ -1,0 +1,14 @@
+# An example model that works with this config is "https://huggingface.co/yuvalkirstain/PickScore_v1"
+defaults:
+  - attn-patch-nocrop-4layer-frozen
+
+name: megatron_multicrop_rm_attn_patch_nocrop_4layer_frozen_nowarmup
+
+model:
+  optim:
+    lr: 3e-5        # slightly higher lr than the previous one
+    sched:
+      name: PolynomialDecayAnnealing
+      warmup_steps: 0
+      power: 1.0
+      min_lr: 0

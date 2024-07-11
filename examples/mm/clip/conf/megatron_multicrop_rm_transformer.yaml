@@ -239,8 +239,13 @@ model:
     no_crop_images: True
     train:
       drop_last: True
+      filter_ties: False
     val:
       drop_last: True
+      filter_ties: False
+    test:
+      drop_last: True
+      filter_ties: False
 
   # Nsys profiling options
   nsys_profile:

@@ -39,6 +39,7 @@ from nemo_aligner.data.mm.pickscore_dataset import build_train_valid_datasets
 import math
 from omegaconf import OmegaConf
 
+BICUBIC = InterpolationMode.BICUBIC
 
 class PickscoreRewardModel(MegatronModule):
     """CLIP-Based Model"""

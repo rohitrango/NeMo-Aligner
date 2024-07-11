@@ -11,7 +11,7 @@ trainer:
     limit_val_batches: 1
     save_interval: 500
     gradient_clip_val: 10
-    max_epochs: 1 # PTL default. In practice, max_steps will be reached first.
+    max_epochs: 10000 # PTL default. In practice, max_steps will be reached first.
     max_steps: 1000000
     
   logger: False # logger provided by exp_manager
@@ -24,7 +24,6 @@ trainer:
   benchmark: False
   enable_model_summary: True
   val_check_interval: 20
-
 
 exp_manager:
   exp_dir: null
@@ -39,10 +38,11 @@ exp_manager:
   create_checkpoint_callback: True
   create_tensorboard_logger: True
   checkpoint_callback_params:
+    save_top_k: 3
     every_n_train_steps: 50
     every_n_epochs: 0
-    monitor: reduced_train_loss
-    filename: '${name}--{reduced_train_loss:.2f}-{step}-{consumed_samples}'
+    monitor: val_loss
+    filename: '${name}--{val_loss:.6f}-{step}-{consumed_samples}'
   resume_if_exists: True
   resume_ignore_no_checkpoint: True
   ema:
