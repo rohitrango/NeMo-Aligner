@@ -12,14 +12,18 @@ KL_COEF=${KL_COEF:=0.1}
 ETA=${ETA:=0.0}
 DATASET=${DATASET:="pickapic50k.tar"}
 MICRO_BS=${MICRO_BS:=2}
-GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=2}
-PEFT=${PEFT:="none"}
+GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=4}
+PEFT=${PEFT:="sdlora"}
 NUM_DEVICES=8
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 
-RUN_DIR=/opt/nemo-aligner/run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
-WANDB_NAME=DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+RUN_DIR=/opt/nemo-aligner/sd_draft_runs/sd_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+WANDB_NAME=SD_DRaFT+${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
+
+# RUN_DIR=/opt/nemo-aligner/run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+# WANDB_NAME=DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+# WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
 LOGDIR=${RUN_DIR}/logs
 mkdir -p ${LOGDIR}
@@ -31,11 +35,10 @@ CONFIG_NAME="draftp_sd"
 UNET_CKPT="/opt/nemo-aligner/checkpoints/model_weights.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/vae.bin"
 RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
-DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/draft_p_saved_ckpts"
+# DIR_SAVE_CKPT_PATH="/opt/nemo-aligner/draft_p_saved_ckpts"
+DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sd_draft_runs/draftp_saved_ckpts_${JOBNAME}
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
-
-# git config --global --add safe.directory /opt/nemo-aligner \
 
 DEVICE="0,1,2,3,4,5,6,7"
 echo "Running DRaFT on ${DEVICE}"
@@ -53,7 +56,7 @@ export HYDRA_FULL_ERROR=1 \
     model.truncation_steps=1 \
     trainer.draftp_sd.max_epochs=1 \
     trainer.draftp_sd.max_steps=4000 \
-    trainer.draftp_sd.save_interval=500 \
+    trainer.draftp_sd.save_interval=100 \
     model.unet_config.from_pretrained=${UNET_CKPT} \
     model.first_stage_config.from_pretrained=${VAE_CKPT} \
     model.micro_batch_size=${MICRO_BS} \
@@ -67,6 +70,6 @@ export HYDRA_FULL_ERROR=1 \
     rm.trainer.devices=${NUM_DEVICES} \
     exp_manager.create_wandb_logger=True \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
-    exp_manager.resume_if_exists=False \
+    exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
     exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt

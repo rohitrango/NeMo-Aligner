@@ -239,10 +239,10 @@ model:
     no_crop_images: True
     train:
       drop_last: True
-      filter_ties: False
+      filter_ties: True
     val:
       drop_last: True
-      filter_ties: False
+      filter_ties: True
     test:
       drop_last: True
       filter_ties: False

@@ -6,7 +6,7 @@ from PIL import Image
 from torchvision.transforms import CenterCrop, Compose, InterpolationMode, Normalize, Resize
 import safetensors
 import einops
-from typing import List
+from typing import List, Union
 
 from megatron.core import parallel_state
 from nemo.collections.multimodal.data.clip.clip_dataset import get_preprocess_fns
@@ -25,11 +25,18 @@ from nemo_aligner.data.mm.pickscore_dataset import build_train_valid_datasets
 import math
 from omegaconf import OmegaConf
 from safetensors.torch import load_file as load_safetensors
+from nemo.collections.multimodal.modules.stable_diffusion.attention import BasicTransformerBlock
+from omegaconf import open_dict
 
 BICUBIC = InterpolationMode.BICUBIC
 BILINEAR = InterpolationMode.BILINEAR
 PATCH_SIZE = 224
 PATCH_SIZE2 = PATCH_SIZE//2
+
+def inverse_permutation(p):
+    inv_p = np.zeros_like(p)
+    inv_p[p] = np.arange(p.shape[0])
+    return inv_p
 
 def get_idx(end, device):
     return torch.arange(start=0, end=end, dtype=torch.float32, device=device)
@@ -133,20 +140,29 @@ class PickscoreMultiCropRewardModel(MegatronModule):
 
     def modify_model_cfg(self, cfg):
         ''' modify config depending on aggregation modes etc '''
-        agg = cfg.get('aggregator', 'transformer')
-        # aggregation specific changes
-        if agg == 'attn_patch':
-            cfg.vision.post_process = False
-            cfg.text.post_process = False
-        if agg == 'attn_patch_nocrop':
-            cfg.vision.post_process = False
-            cfg.text.post_process = False
-            # global aggregation is true
-            cfg.image_patch_attn.add_global_image_context = True
+        # make cfg 
+        with open_dict(cfg):
+            agg = cfg.get('aggregator', 'transformer')
+            # aggregation specific changes
+            if agg == 'attn_patch':
+                cfg.vision.post_process = False
+                cfg.text.post_process = False
+            if agg == 'attn_patch_nocrop':
+                cfg.vision.post_process = False
+                cfg.text.post_process = False
+                # global aggregation is true
+                cfg.image_patch_attn.add_global_image_context = True
+            if agg == 'llava-hd-v0':
+                # using llava-like image augmentation, text encoder will return all tokens
+                # we will only use CLS tokens from image
+                cfg.vision.post_process = True
+                cfg.text.post_process = False
+                cfg.image_patch_attn.add_global_image_context = True
+                cfg.test_time_resolution = 768
         return cfg
     
     def set_aggregator(self, aggregator, attn_cfg, model_parallel_config):
-        ''' set aggregator for the correct usage '''
+        ''' set aggregator modules for the correct usage '''
         sigma = attn_cfg.get('sigma', 0.02)
         num_layers = attn_cfg.get('num_layers', 2)
         model_cfg = self.model_cfg
@@ -242,6 +258,35 @@ class PickscoreMultiCropRewardModel(MegatronModule):
                 nn.Linear(output_size*4, output_size)
             )
             self.out_dim = model_cfg.output_dim
+        
+        elif aggregator == 'llava-hd-v0':
+            # we need a projection for linear embedding (image coordinates)
+            self.out_dim = output_size = model_cfg.output_dim
+            if model_cfg.get("do_text_proj", True):
+                self._do_text_proj = True
+                self.text_proj = nn.Linear(model_cfg.text.hidden_size, 3 * model_cfg.output_dim)
+            else:
+                self._do_text_proj = False
+                self.text_proj = nn.Linear(3 * model_cfg.output_dim, model_cfg.text.hidden_size)
+            # linear embedding for (x, y)
+            self.linear_embed = nn.Sequential(
+                nn.Linear(output_size, output_size*4),
+                nn.SiLU(),
+                nn.Linear(output_size*4, output_size)
+            )
+            # cross attention transformer block
+            layers = []
+            img_dim = output_size * 3
+            n_heads = attn_cfg.num_attention_heads
+            for _ in range(num_layers):
+                layers.append(BasicTransformerBlock(
+                    dim=img_dim,
+                    n_heads=n_heads,
+                    d_head=img_dim//n_heads, context_dim=model_cfg.text.hidden_size,
+                    disable_self_attn=True,
+                ))
+            self.transformer = nn.ModuleList(layers)
+        
         else:
             raise ValueError(f"Invalid aggregator {aggregator}.")
 
@@ -321,51 +366,119 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             image_centers.append(torch.FloatTensor([x + PATCH_SIZE2, y + PATCH_SIZE2]).unsqueeze(0).repeat(b, 1).to(device))  # [b, 2]
         return image_crops, image_centers
 
+    def aggregate_uniform_samples_fn(self, images):
+        ''' uniformly sample patches from the image by resizing 
+        
+        images: list of [3, H, W] images
+        '''
+        tgt_res = [x.shape[-1] for x in images]
+        # if testing model, and test_time_resolution is set, then override
+        if not self.training and self.test_time_resolution is not None:
+            tgt_res = [self.test_time_resolution for _ in tgt_res]
+        # resample
+        tgt_res = [int(np.ceil(x*1.0/PATCH_SIZE) * PATCH_SIZE) for x in tgt_res]
+        images = [Resize(res, interpolation=BICUBIC, antialias=True)(img) for res, img in zip(tgt_res, images)]
+        image_crops, crop_centers, start_indices = self.get_uniform_crops(images)
+        crop_centers = crop_centers.to(image_crops.device)
+        self._start_indices = start_indices  # bookkeeping for later
+        # now we have the list of crops, run them through the encoder (only the grad subset)
+        numcrops = image_crops.shape[0]
+        perm = self.rng.permutation(numcrops)
+        invperm = inverse_permutation(perm)
+        num_crops_grad = self.num_crops_grad
+        # get features with and without grad
+        grad_features = self.vision_encoder(image_crops[perm[:num_crops_grad]].contiguous())
+        with torch.no_grad():
+            nograd_features = self.vision_encoder(image_crops[perm[num_crops_grad:]].contiguous())
+        # concat and reshuffle them back
+        encoded_features = torch.cat([grad_features, nograd_features], 0) 
+        encoded_features = encoded_features[invperm].contiguous()
+        return encoded_features, crop_centers, perm
+    
+    def get_uniform_crops(self, images):
+        ''' given a list of images, crop them uniformly and save their centers and start indices '''
+        image_crops = []
+        crop_centers = []
+        start_indices = []
+        start = 0
+        for img in images:
+            # add to start indices
+            start_indices.append(start)
+            patches = img.unfold(1, PATCH_SIZE, PATCH_SIZE).unfold(2, PATCH_SIZE, PATCH_SIZE)  # [c, np, np, p, p]
+            c, nhp, nwp, _, _ = patches.shape
+            patches = patches.flatten(1, 2).permute(1, 0, 2, 3)  # [b, c, p, p]
+            cx, cy = torch.meshgrid(torch.arange(nhp), torch.arange(nwp), indexing='ij')
+            cx, cy = [((x*PATCH_SIZE) + PATCH_SIZE2).flatten() for x in [cx, cy]]
+            center = torch.stack([cx, cy], 1)  # [b, 2]
+            # append
+            image_crops.append(patches)
+            crop_centers.append(center)
+            # update start
+            start += patches.shape[0]
+        # last index append
+        start_indices.append(start)
+        # concat
+        image_crops = torch.cat(image_crops, 0)   # [B, c, p, p]
+        crop_centers = torch.cat(crop_centers, 0)
+        return image_crops, crop_centers, start_indices
+
+    def aggregate_sample_crops_fn(self, images, ):
+        ''' this is the default crop function which samples crops at training time '''
+        if self.training:
+            res = int(self.rng.choice(self.resolutions))
+            interp = ([BILINEAR, BICUBIC])[int(np.random.randint(2))]
+        else:
+            # if there is a test-time resolution, use that
+            if self.test_time_resolution is not None:
+                try:  # this can be a number or a string specifying how to choose target resolution
+                    res = int(self.test_time_resolution)
+                except:
+                    if res == 'min':
+                        res = int(min([x.shape[-1] for x in images]))
+                    elif res == 'max':
+                        res = int(max([x.shape[-1] for x in images]))
+                    else:
+                        raise ValueError
+            else:
+                res = int(max([x.shape[-1] for x in images]))
+            interp = BICUBIC
+
+        #### this portion is to get image crops
+        # we will always use the vision encoder to output crop features
+        # resample images to a target size
+        img_transform = Resize(res, interpolation=interp, antialias=True)
+        images = [img_transform(x) for x in images]
+        images = torch.stack(images, 0)
+        # get crops 
+        image_crops, image_centers = self.get_image_crops(images)  # bchw --> list [bch'w', bch'w' ....] , and list [B2, B2, ...] containing (cx, cy)
+        num_crops = len(image_crops)
+        ### select one crop to pass gradients through
+        grad_idx = self.rng.permutation(num_crops)[:self.num_crops_grad]
+        encoded_features = []
+        for i in range(num_crops):
+            with torch.set_grad_enabled(i in grad_idx):
+                encoded_features.append(self.vision_encoder(image_crops[i]))   # [B, D] or [B, S, D]
+        return encoded_features, image_centers, grad_idx
+
     def get_reward(self, images, captions,):
         # images have to be resized, sample interpolation strategy and resolution
         # images   = list of tensors of size [3, H_i, W_i]
         # captions = tokenized text
-        image_list = images
-        image_features = 0
+        image_list = [x.clone() for x in images]
+        image_patch_features = 0
 
         # if this flag is set to true, we will perform some cropping and feature aggregation of the crops
         if self.aggregate_crops:
-            if self.training:
-                res = int(self.rng.choice(self.resolutions))
-                interp = ([BILINEAR, BICUBIC])[int(np.random.randint(2))]
+            # choose aggregation function
+            if self.aggregator_name in ['gap', 'transformer', 'attn_patch', 'attn_patch_nocrop']:
+                aggregate_fn = self.aggregate_sample_crops_fn
+            elif self.aggregator_name in ['llava-hd-v0']:
+                aggregate_fn = self.aggregate_uniform_samples_fn
             else:
-                # if there is a test-time resolution, use that
-                if self.test_time_resolution is not None:
-                    try:  # this can be a number or a string specifying how to choose target resolution
-                        res = int(self.test_time_resolution)
-                    except:
-                        if res == 'min':
-                            res = int(min([x.shape[-1] for x in images]))
-                        elif res == 'max':
-                            res = int(max([x.shape[-1] for x in images]))
-                        else:
-                            raise ValueError
-                else:
-                    res = int(max([x.shape[-1] for x in images]))
-                interp = BICUBIC
-
-            #### this portion is to get image crops
-            # we will always use the vision encoder to output crop features
-            # resample images to a target size
-            img_transform = Resize(res, interpolation=interp, antialias=True)
-            images = [img_transform(x) for x in images]
-            images = torch.stack(images, 0)
-            # get crops 
-            image_crops, image_centers = self.get_image_crops(images)  # bchw --> list [bch'w', bch'w' ....] , and list [B2, B2, ...] containing (cx, cy)
-            num_crops = len(image_crops)
-            ### select one crop to pass gradients through
-            grad_idx = self.rng.permutation(num_crops)[:self.num_crops_grad]
-            encoded_features = []
-            for i in range(num_crops):
-                with torch.set_grad_enabled(i in grad_idx):
-                    encoded_features.append(self.vision_encoder(image_crops[i]))   # [B, D] or [B, S, D]
+                raise ValueError
+            encoded_features, image_centers, grad_idx = aggregate_fn(images)
             # concat and feed them to attention
-            image_features = self.aggregate(encoded_features, image_centers, grad_idx)
+            image_patch_features = self.aggregate(encoded_features, image_centers, grad_idx)
 
         # add global context (i.e. entire image if provided)
         global_img_feature = 0
@@ -377,7 +490,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
 
         # capture text features and compute reward
         text_features = self.text_encoder(captions)  # [b, d] or [s, b, d]
-        rewards = self._reward_fn(image_features, global_img_feature, text_features)
+        rewards = self._reward_fn(image_patch_features, global_img_feature, text_features)
         return rewards
     
     def _get_global_feature(self, resized_imgs):
@@ -385,11 +498,17 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         if self.aggregator_name in ['gap', 'transformer']:
             # in this case, all features are the pooled versions, so we simply compute the reward
             global_img_feature = self.vision_encoder(resized_imgs)
+
         elif self.aggregator_name == 'attn_patch':
             # shouldnt even be here
             return 0
+
         elif self.aggregator_name == 'attn_patch_nocrop':
             return self.vision_encoder(resized_imgs)
+        
+        elif self.aggregator_name == 'llava-hd-v0':
+            return self.vision_encoder(resized_imgs)  # again, just get the CLS token from vision encoder
+
         else:
             raise ValueError(f"unsupported global image feature")
         return global_img_feature
@@ -424,12 +543,41 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             full_f = self.transformer(full_f, None)
             final_img_feature, final_text_feature = full_f[0], full_f[-1]
             rewards = self.logit_scale.exp() * (F.normalize(final_img_feature, dim=1) * F.normalize(final_text_feature, dim=-1)).sum(1)
+        
+        elif self.aggregator_name == 'llava-hd-v0':
+            # encoded features are a mega (b, d) tensor containing concatenated patch features
+            start_idx = self._start_indices
+            n = len(start_idx) - 1
+            image_crop_features = [image_features[start_idx[i]:start_idx[i+1]] for i in range(n)]  # [b_i, d]
+            assert len(image_crop_features) == global_img_feature.shape[0]
+            image_crop_features = [torch.cat([crops, global_img_feature[i:i+1].repeat(crops.shape[0], 1)], dim=1) for i, crops in enumerate(image_crop_features)]  # list of [b_i, D] where b_i = numcrops
+            # convert text features to (b, s, c)
+            text_features = text_features.permute(1, 0, 2).contiguous()     # (s, b, c) -> (b, s, c)
+            rewards = []
+            # run this through spatial transformer
+            for i in range(n):
+                # get image features and raw text features
+                img_f = image_crop_features[i][None].contiguous()    # [b_i, numcrops_i, d] where b_i = batchsize = 1
+                txt_f = text_features[i:i+1].contiguous()   # (1, s, c)
+                for block in self.transformer:
+                    img_f = block(img_f, context=txt_f)     # (b, s, c)
+                # compute reward
+                if self._do_text_proj:
+                    txt_final = self.text_proj(txt_f[:, -1].contiguous())  # (1, c)
+                    img_final = img_f[:, 0].contiguous()
+                else:
+                    img_final = self.text_proj(img_f[:, 0].contiguous())
+                    txt_final = txt_f[:, -1].contiguous()
+
+                reward = self.logit_scale.exp() * (F.normalize(img_final, dim=1) *  F.normalize(txt_final, dim=1)).sum()
+                rewards.append(reward)
+            rewards = torch.stack(rewards)
 
         else:
             raise ValueError(f"unsupported aggregation")
         return rewards
     
-    def aggregate(self, encoded_features: List[torch.Tensor], image_centers: List[torch.Tensor], grad_idx: List[int]):
+    def aggregate(self, encoded_features: Union[List[torch.Tensor], torch.Tensor], image_centers: List[torch.Tensor], grad_idx: List[int]):
         ''' 
         encoded_features: stacked [B, S, D] or list of tensors
         image_centers: list of [B,2], [B,2] ... tensors
@@ -466,6 +614,12 @@ class PickscoreMultiCropRewardModel(MegatronModule):
                     # image_features.append(t_embed[:, i, :] + vision_proj)   # each element is [B, D]
             # assign it to stacked values
             image_features = torch.stack(image_features, dim=1).mean(1)  # [B, S, D]
+        
+        elif self.aggregator_name == 'llava-hd-v0':
+            # just concat the position embeddings
+            t_embed = self.get_pos_embed([image_centers])[:, 0].contiguous()  # [b, d2]
+            return torch.cat([encoded_features, t_embed], dim=1)  # [b, d1+d2]
+
         else:
             raise ValueError("Invalid aggregation function.")
         return image_features

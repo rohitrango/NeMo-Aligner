@@ -1,9 +1,9 @@
 #!/bin/bash
-#SBATCH -A coreai_dlalgo_genai
+#SBATCH -A coreai_dlalgo_llm
 #SBATCH -N 1
 #SBATCH -t 4:00:00
 #SBATCH --ntasks=1
-#SBATCH --job-name=coreai_dlalgo_genai-rewardtraining:*
+#SBATCH --job-name=coreai_dlalgo_llm-rewardtraining:*
 #SBATCH --partition=batch
 #SBATCH --exclusive
 #SBATCH --overcommit

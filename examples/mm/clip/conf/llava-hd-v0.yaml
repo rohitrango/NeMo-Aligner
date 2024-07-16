@@ -1,0 +1,36 @@
+# An example model that works with this config is "https://huggingface.co/yuvalkirstain/PickScore_v1"
+defaults:
+  - megatron_multicrop_rm_transformer
+
+name: llava-hd-v0
+
+trainer:
+  max_steps: 20000
+  val_check_interval: 200
+  precision: 32
+
+model:
+  do_text_proj: True          # if true, project the text embedding, else project the image embedding
+  test_time_resolution: None
+  aggregator: llava-hd-v0
+  micro_batch_size: 32
+  image_patch_attn:
+    num_layers: 4
+    num_attention_heads: 16
+    num_crops_grad: 10
+    add_global_image_context: True     
+  vision:
+    freeze: True
+    post_process: True
+  text:
+    freeze: True
+    post_process: False  # important to avoid post-processing the clip and vit features
+  data:
+    num_workers: 8
+  optim:
+    lr: 1e-5        # reduced lr for transformer seems to work better? 
+    sched:
+      name: PolynomialDecayAnnealing
+      warmup_steps: 250
+      power: 1.0
+      min_lr: 0

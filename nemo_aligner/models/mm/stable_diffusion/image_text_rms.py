@@ -33,7 +33,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import average_losses_ac
 from nemo.collections.nlp.modules.common.megatron.module import MegatronModule
 from nemo.collections.nlp.modules.common.megatron.transformer import ParallelTransformer
 from nemo.collections.nlp.modules.common.megatron.utils import init_method_normal, scaled_init_method_normal
-from nemo_aligner.models.mm.stable_diffusion.image_text_rms_mc import PickscoreMultiCropRewardModel, MegatronCLIPMultiCropRewardModel
+from nemo_aligner.models.mm.stable_diffusion.image_text_rms_mc import MegatronCLIPMultiCropRewardModel
 from nemo.utils import logging
 from nemo_aligner.data.mm.pickscore_dataset import build_train_valid_datasets
 import math

@@ -190,10 +190,6 @@ def main(cfg) -> None:
 
     logger.log_hyperparams(OmegaConf.to_container(cfg))
 
-    if local_rank == 0:
-        print(ptl_model)
-        # import time
-        # time.sleep(10)
     torch.distributed.barrier()
 
     ckpt_callback = add_custom_checkpoint_callback(trainer, ptl_model)

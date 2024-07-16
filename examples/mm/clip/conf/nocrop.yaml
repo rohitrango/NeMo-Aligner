@@ -1,5 +1,6 @@
 # An example model that works with this config is "https://huggingface.co/yuvalkirstain/PickScore_v1"
 # this is the GAP (global average pooling) config
+# nocrop config simply trains on the 224x size image
 name: nocrop
 restore_from_path: null # used when starting from a .nemo file
 multicrop: True
