@@ -114,6 +114,7 @@ def main(cfg) -> None:
     logger.log_hyperparams(OmegaConf.to_container(cfg))
 
     reward_model = get_reward_model(cfg.rm, mbs=cfg.model.micro_batch_size, gbs=cfg.model.global_batch_size)
+    reward_model.eval().requires_grad_(False)
     ptl_model.reward_model = reward_model
 
     ckpt_callback = add_custom_checkpoint_callback(trainer, ptl_model)

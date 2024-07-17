@@ -55,7 +55,10 @@ class MegatronSDDRaFTPModel(MegatronLatentDiffusion, SupervisedInterface):
     def __init__(self, cfg, trainer):
 
         super().__init__(cfg, trainer=trainer)
-        self.init_model = LatentDiffusion(cfg, None).to(torch.cuda.current_device()).eval()
+        init_model = LatentDiffusion(cfg, None).to(torch.cuda.current_device())
+        init_model.eval().requires_grad_(False)
+        # set this init model
+        self.init_model = init_model
         self.cfg = cfg
         self.with_distributed_adam = self.with_distributed_adam
         self.model.first_stage_model.requires_grad_(False)
@@ -220,18 +223,17 @@ class MegatronSDDRaFTPModel(MegatronLatentDiffusion, SupervisedInterface):
 
             device_draft_p = self.model.betas.device
 
+            # init sampler and make schedule
             sampler_draft_p = sampling_utils.initialize_sampler(self.model, self.sampler_type.upper())
             sampler_init = sampling_utils.initialize_sampler(self.init_model, self.sampler_type.upper())
+            sampler_draft_p.make_schedule(ddim_num_steps=self.inference_steps, ddim_eta=self.eta, verbose=False)
+            sampler_init.make_schedule(ddim_num_steps=self.inference_steps, ddim_eta=self.eta, verbose=False)
 
             cond, u_cond = sampling_utils.encode_prompt(
                 self.model.cond_stage_model, batch, self.unconditional_guidance_scale
             )
 
-            sampler_draft_p.make_schedule(ddim_num_steps=self.inference_steps, ddim_eta=self.eta, verbose=False)
-            sampler_init.make_schedule(ddim_num_steps=self.inference_steps, ddim_eta=self.eta, verbose=False)
-
             timesteps = sampler_draft_p.ddim_timesteps
-
             time_range = np.flip(timesteps)
             total_steps = timesteps.shape[0]
 
@@ -249,35 +251,45 @@ class MegatronSDDRaFTPModel(MegatronLatentDiffusion, SupervisedInterface):
 
                 denoise_step_args = [total_steps, i, batch_size, device_draft_p, step, cond]
 
-                if i < total_steps - truncation_steps:
-                    with torch.no_grad():
-                        img_draft_p, pred_x0_draft_p, eps_t_draft_p = sampler_draft_p.single_ddim_denoise_step(
-                            prev_img_draft_p, *denoise_step_args, **denoise_step_kwargs
-                        )
-
-                        prev_img_draft_p = img_draft_p
-                else:
-
-                    img_draft_p, pred_x0_draft_p, eps_t_draft_p = sampler_draft_p.single_ddim_denoise_step(
-                        prev_img_draft_p, *denoise_step_args, **denoise_step_kwargs
-                    )
-                    list_eps_draft_p.append(eps_t_draft_p)
-
-                    with torch.no_grad():
-                        _, _, eps_t_init = sampler_init.single_ddim_denoise_step(
-                            prev_img_draft_p, *denoise_step_args, **denoise_step_kwargs
-                        )
-                        list_eps_init.append(eps_t_init)
-
-                    prev_img_draft_p = img_draft_p
+                # run ddim step for FT model
+                img_draft_p, pred_x0_draft_p, eps_t_draft_p = sampler_draft_p.single_ddim_denoise_step(
+                    prev_img_draft_p.clone(), *denoise_step_args, **denoise_step_kwargs
+                )
+                # run ddim step for base model
+                img_init, pred_x0_init, eps_t_init = sampler_init.single_ddim_denoise_step(
+                    prev_img_draft_p.clone(), *denoise_step_args, **denoise_step_kwargs
+                )
+                # sigmas_i = sampler_draft_p.ddim_sigmas[i]
+                # get weighing scheme
+                w_draft = float(weighing_fn(None, None, i, total_steps))
+                w_base = 1 - w_draft
+                # combine weights
+                eps = w_base * eps_t_init + w_draft * eps_t_draft_p
+                # use this to get new image
+                index = total_steps - i - 1
+                ts = torch.full((batch_size,), step, device=device_draft_p, dtype=torch.long)
+                # get new image
+                img_new_p, pred_x0_new_p = sampler_draft_p._get_x_prev_and_pred_x0(
+                    False,
+                    batch_size,
+                    index,
+                    device_draft_p,
+                    prev_img_draft_p.clone(),
+                    ts,
+                    None,    # model output, we shouldnt need this
+                    eps,
+                    False,
+                    False,
+                    1.0,
+                    0.0,
+                )
+                prev_img_draft_p = img_new_p
 
             last_states = [pred_x0_draft_p]
-
+            # stack
             trajectories_predx0 = (
                 torch.stack(last_states, dim=0).transpose(0, 1).contiguous().view(-1, *last_states[0].shape[1:])
-            )
-            t_eps_draft_p = torch.stack(list_eps_draft_p).to(torch.device("cuda"))
-            t_eps_init = torch.stack(list_eps_init).to(torch.device("cuda"))
+            )       # B1CHW -> BCHW
 
             vae_decoder_output = []
             for i in range(0, batch_size, self.vae_batch_size):
@@ -287,7 +299,7 @@ class MegatronSDDRaFTPModel(MegatronLatentDiffusion, SupervisedInterface):
             vae_decoder_output = torch.cat(vae_decoder_output, dim=0)
             vae_decoder_output = torch.clip((vae_decoder_output + 1) / 2, 0, 1) * 255.0
 
-            return vae_decoder_output, t_eps_draft_p, t_eps_init
+            return vae_decoder_output
 
 
     def generate(

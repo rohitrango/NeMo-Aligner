@@ -35,12 +35,12 @@ SLEEP=${SLEEP:=0}
 
 echo "additional kwargs: ${ADDITIONAL_KWARGS}"
 
-RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
+# RUN_DIR=/opt/nemo-aligner/sdxl_draft_runs/sdxl_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WANDB_NAME=SDXL_DRaFT+${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
-LOGDIR=${RUN_DIR}/logs
-mkdir -p ${LOGDIR}
+# LOGDIR=${RUN_DIR}/logs
+# mkdir -p ${LOGDIR}
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME=${CONFIG_NAME:="draftp_sdxl"}
 UNET_CKPT="/opt/nemo-aligner/checkpoints/sdxl/unet_nemo.ckpt"
@@ -50,8 +50,6 @@ VAE_CKPT="/opt/nemo-aligner/checkpoints/sdxl/vae_nemo.ckpt"
 if [ ! -z "${MULTICROP}" ]; then
 # if exists
     echo "Using multicrop model using $MULTICROP"
-    # RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr/checkpoints/pickscore_multicrop.nemo"
-    # RM_CKPT="/opt/nemo-aligner/checkpoints/multicrop-rm/t4layer_smalllr_sbd/checkpoints/pickscore_multicrop.nemo"
     RM_CKPT=${MULTICROP}
     MULTICROP="rm.multicrop=True"
 else

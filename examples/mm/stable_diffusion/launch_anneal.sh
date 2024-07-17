@@ -17,14 +17,10 @@ PEFT=${PEFT:="sdlora"}
 NUM_DEVICES=8
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION))
 
-# RUN_DIR=/opt/nemo-aligner/sd_draft_runs/sd_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WANDB_NAME=SD_DRaFT+${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 
-# RUN_DIR=/opt/nemo-aligner/run_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
-# WANDB_NAME=DRaFT+_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
-# WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
-
+# RUN_DIR=/opt/nemo-aligner/sd_draft_runs/sd_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 # LOGDIR=${RUN_DIR}/logs
 # mkdir -p ${LOGDIR}
 
@@ -39,11 +35,13 @@ DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sd_draft_runs/draftp_saved_ckpts_${JOBNAME}
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
 
+EVAL_SCRIPT=${EVAL_SCRIPT:-"eval_sd_draftp.py"}
+
 DEVICE="0,1,2,3,4,5,6,7"
 echo "Running DRaFT on ${DEVICE}"
 export HYDRA_FULL_ERROR=1 \
 && wandb login ${WANDB} \
-&& MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=8 /opt/nemo-aligner/examples/mm/stable_diffusion/train_sd_draftp.py \
+&& MASTER_PORT=15003 CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=8 /opt/nemo-aligner/examples/mm/stable_diffusion/${EVAL_SCRIPT} \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \
@@ -53,7 +51,7 @@ export HYDRA_FULL_ERROR=1 \
     model.infer.eta=0.0 \
     model.kl_coeff=${KL_COEF} \
     model.truncation_steps=1 \
-    trainer.draftp_sd.max_epochs=100 \
+    trainer.draftp_sd.max_epochs=1 \
     trainer.draftp_sd.max_steps=4000 \
     trainer.draftp_sd.save_interval=100 \
     model.unet_config.from_pretrained=${UNET_CKPT} \

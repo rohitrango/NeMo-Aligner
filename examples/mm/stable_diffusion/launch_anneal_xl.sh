@@ -16,8 +16,6 @@ else
 	NNODES=""
 fi
 
-pip install decord
-
 echo "Setting nodes to $NNODES"
 LR=${LR:=0.00025}
 INF_STEPS=${INF_STEPS:=25}
@@ -30,8 +28,11 @@ PEFT=${PEFT:="sdlora"}
 NUM_DEVICES=${NUM_DEVICES:=8}
 GLOBAL_BATCH_SIZE=$((MICRO_BS*NUM_DEVICES*GRAD_ACCUMULATION*NUMNODES))
 LOG_WANDB=${LOG_WANDB:="True"}
-JOBNAME=${JOBNAME:="dummy"}
 SLEEP=${SLEEP:=0}
+if [ -z "${JOBNAME}" ]; then
+    echo "JOBNAME not specified, exiting"
+    exit
+fi
 
 echo "additional kwargs: ${ADDITIONAL_KWARGS}"
 
@@ -74,9 +75,12 @@ else
 fi
 echo "Setting distributed params to $DISTRIBUTED_PARAMS"
 
+EVAL_SCRIPT=${EVAL_SCRIPT:-"anneal_sdxl.py"}
+
 # sleep $SLEEP
 export DEVICE="0,1,2,3,4,5,6,7" && echo "Running DRaFT+ on ${DEVICE}"  && wandb login ${WANDB} && export HYDRA_FULL_ERROR=1 
-echo CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $NNODES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/anneal_sdxl.py \
+set -x
+CUDA_VISIBLE_DEVICES="${DEVICE}" torchrun --nproc_per_node=$NUM_DEVICES $NNODES $DISTRIBUTED_PARAMS /opt/nemo-aligner/examples/mm/stable_diffusion/${EVAL_SCRIPT} \
     --config-path=${CONFIG_PATH} \
     --config-name=${CONFIG_NAME} \
     model.optim.lr=${LR} \

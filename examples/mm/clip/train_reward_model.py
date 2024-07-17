@@ -35,7 +35,6 @@ def main(cfg) -> None:
     trainer = MegatronTrainerBuilder(cfg).create_trainer()
     exp_manager(trainer, cfg.exp_manager)
 
-    # timer = Timer(cfg.exp_manager.get("max_time_per_run"))
     model = MegatronCLIPMultiCropRewardModel(cfg.model, trainer)
     trainer.fit(model)
 
