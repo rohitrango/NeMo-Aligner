@@ -244,6 +244,7 @@ def main(cfg) -> None:
     ### Run PartiPrompts
     batch_size = 8
     partiprompts_data_path = "/opt/nemo-aligner/datasets/PartiPrompts.tsv"
+    custom_prompts_path = "/opt/nemo-aligner/datasets/coverage_prompts.txt"
     partiprompts = pd.read_csv(partiprompts_data_path, delimiter="\t")['Prompt']
     partiprompts = partiprompts[local_rank::world_size]
     partiprompts = list(partiprompts.iteritems())
@@ -268,10 +269,10 @@ def main(cfg) -> None:
             partiprompts_batch = []
         # everyone has to wait for the check (so that one process doesnt create the dir first) 
         torch.distributed.barrier()
+        # let rank 0 make the dir so that others dont write to another dir
         if local_rank == 0:
             os.makedirs(pp_save_path, exist_ok=True)
         torch.distributed.barrier()
-        # let rank 0 make the dir so that others dont write to another dir
 
         logging.info("Generating partiprompt images...")
         if local_rank == 0:
@@ -321,6 +322,34 @@ def main(cfg) -> None:
                 for index, image in zip(indices, images):
                     Image.fromarray(image).save(osp.join(hpsv2_save_path, style, f"{index:05d}.jpg"))
             logging.info(f"Saved HPSv2 images with style: {style}.")
+        
+        ## Get custom prompts
+        coverage_save_path = osp.join(save_root_dir, "saved_images", wt, "coverage")
+        if local_rank == 0:
+            os.makedirs(coverage_save_path, exist_ok=True)
+        torch.distributed.barrier()
+        images_per_prompt = 50
+        images_per_batch = 10
+        logging.info(f"Saving custom images to {coverage_save_path}.")
+        # create prompts
+        with open(custom_prompts_path, "r") as fi:
+            custom_prompts = fi.read().split("\n")
+            if custom_prompts[-1] == "":
+                custom_prompts = custom_prompts[:-1]
+            # create samples and then create batch
+            custom_prompts = list(enumerate(custom_prompts))[local_rank::world_size]
+            # get another generator
+            cgen = torch.Generator(device='cpu')
+            cgen.manual_seed((1243 + 77837 * local_rank)%(int(2**32 - 1)))
+            for promptidx, prompt in custom_prompts:
+                for batchidx in range(images_per_prompt // images_per_batch):
+                    latents = get_latents(images_per_batch, ptl_model, cgen)
+                    images = ptl_model.annealed_guidance([prompt]*images_per_batch, latents, weighing_fn=wt_fn)
+                    images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8) 
+                    for imgidx, image in enumerate(images):
+                        globalimgidx = batchidx * images_per_batch + imgidx
+                        Image.fromarray(image).save(osp.join(coverage_save_path, f"prompt_{promptidx:02d}_image{globalimgidx:05d}.jpg"))
+        logging.info(f"Saved custom images.")
     
 
 
