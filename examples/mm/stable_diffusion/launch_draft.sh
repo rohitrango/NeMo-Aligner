@@ -34,8 +34,11 @@ CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME="draftp_sd"
 UNET_CKPT="/opt/nemo-aligner/checkpoints/model_weights.ckpt"
 VAE_CKPT="/opt/nemo-aligner/checkpoints/vae.bin"
-RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
+# RM_CKPT="/opt/nemo-aligner/checkpoints/pickscore.nemo"
+RM_CKPT=${RM_CKPT:-"/opt/nemo-aligner/checkpoints/pickscore.nemo"}
 DIR_SAVE_CKPT_PATH=/opt/nemo-aligner/sd_draft_runs/draftp_saved_ckpts_${JOBNAME}
+
+echo "Using reward model $RM_CKPT"
 
 mkdir -p ${DIR_SAVE_CKPT_PATH}
 

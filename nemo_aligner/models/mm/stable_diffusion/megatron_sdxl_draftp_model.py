@@ -83,6 +83,9 @@ class MegatronSDXLDRaFTPModel(MegatronDiffusionEngine, SupervisedInterface):
         # delete encoder
         del self.model.first_stage_model.encoder
 
+        # see if clip grounding coefficient is specified
+        self.clip_grounding = cfg.get("clip_grounding", 0)
+
         self.distributed_adam_offload_manager = None
         self.in_channels = self.model.model.diffusion_model.in_channels
         self.height = self.cfg.sampling.base.get('height', 512)
@@ -455,15 +458,27 @@ class MegatronSDXLDRaFTPModel(MegatronDiffusionEngine, SupervisedInterface):
                     kl_penalty = torch.tensor([0.0]).to(torch.cuda.current_device())
                 else:
                     kl_penalty = calculate_gaussian_kl_penalty_shared_var(epsilons_draft_p, epsilons_init).mean()
+
+                # outputs are always in the range (0, 255)
                 rewards = self.reward_model.get_reward(
                     output_tensor_draft_p.permute(0, 2, 3, 1), batch
                 )  # (ub, H, W, C) -> (ub, C, H, W)
                 loss = -rewards.mean() + kl_penalty * self.cfg.kl_coeff
+                
+                # add a clip loss if needed
+                clip_score = torch.zeros_like(loss)
+                if self.clip_grounding > 0:
+                    clip_score = self.reward_model.get_clip_score(
+                        output_tensor_draft_p.permute(0, 2, 3, 1), batch
+                    ).mean()
+                    # add clip loss
+                    loss = loss - self.clip_grounding * clip_score
 
                 reduced_loss = average_losses_across_data_parallel_group([loss])
                 reduced_kl_penalty = average_losses_across_data_parallel_group([kl_penalty])
+                reduced_clip_score = average_losses_across_data_parallel_group([clip_score])
 
-                metrics = {"loss": reduced_loss, "kl_penalty": reduced_kl_penalty}
+                metrics = {"loss": reduced_loss, "kl_penalty": reduced_kl_penalty, 'clip_score': reduced_clip_score}
 
                 if validation_step:
                     metrics["images_and_captions"] = images, captions
@@ -491,7 +506,7 @@ class MegatronSDXLDRaFTPModel(MegatronDiffusionEngine, SupervisedInterface):
         )
 
         metrics = losses_reduced_per_micro_batch[0]
-        for key in ["loss", "kl_penalty"]:
+        for key in ["loss", "kl_penalty", "clip_score"]:
             if losses_reduced_per_micro_batch:
                 metric_mean = torch.stack(
                     [loss_reduced[key] for loss_reduced in losses_reduced_per_micro_batch]

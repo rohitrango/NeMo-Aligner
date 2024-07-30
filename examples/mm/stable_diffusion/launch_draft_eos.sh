@@ -20,4 +20,3 @@ export GRAD_ACCUMULATION=${GRAD_ACCUMULATION:=4}
 export PEFT=${PEFT:="sdlora"}
 
 srun --container-image /lustre/fsw/coreai_dlalgo_genai/rohit/draft_container.sqsh  --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft.sh
-#srun --container-image gitlab-master.nvidia.com/dl/joc/nemo-ci/train:pipe.13548649  --container-mounts /lustre/fsw/coreai_dlalgo_genai/rohit/NeMo-Aligner/:/opt/nemo-aligner,/lustre/fsw/coreai_dlalgo_genai/rohit/NeMo:/opt/NeMo,/lustre/fsw/coreai_dlalgo_genai/rohit/megatron-lm:/opt/megatron-lm bash /opt/nemo-aligner/examples/mm/stable_diffusion/launch_draft.sh

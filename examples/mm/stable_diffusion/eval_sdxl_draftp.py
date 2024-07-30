@@ -29,7 +29,9 @@ import pandas as pd
 from os import path as osp
 from tqdm import tqdm
 import hpsv2
+# NeMo/nemo/collections/nlp/modules/common/megatron/adapters/parallel_adapters.py
 
+from nemo.core.classes.mixins.adapter_mixins import AdapterModuleMixin
 # from nemo.collections.nlp.parts.megatron_trainer_builder import MegatronStableDiffusionTrainerBuilder
 from nemo.collections.nlp.parts.peft_config import PEFT_CONFIG_MAP
 from nemo.core.config import hydra_runner
@@ -63,7 +65,7 @@ from nemo.collections.multimodal.models.text_to_image.stable_diffusion.ldm.autoe
 from nemo.collections.multimodal.modules.stable_diffusion.diffusionmodules.model import Encoder, Decoder, ResnetBlock, AttnBlock
 from nemo_aligner.models.mm.stable_diffusion.image_text_rms import MegatronCLIPRewardModel
 from nemo.collections.multimodal.modules.stable_diffusion.encoders.modules import FrozenOpenCLIPEmbedder, FrozenOpenCLIPEmbedder2, FrozenCLIPEmbedder
-from nemo.collections.nlp.modules.common.megatron.adapters.parallel_adapters import ParallelLinearAdapter
+from nemo.collections.nlp.modules.common.megatron.adapters.parallel_adapters import ParallelLinearAdapter, AdapterName
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 # checkpointing
@@ -121,6 +123,9 @@ def get_weight_fn(wt_type: str):
     elif wt_type.startswith("step"):   # use a step function (step_{p})
         frac = float(wt_type.split("_")[1])
         wt_draft = lambda sigma, sigma_next, i, total: float((i*1.0/total) >= frac)
+    elif wt_type.startswith("lora"):
+        # use draft
+        wt_draft = lambda sigma, sigma_next, i, total: 1
     else:
         raise ValueError(f"invalid weighing type: {wt_type}")
     return wt_draft
@@ -255,8 +260,28 @@ def main(cfg) -> None:
 
     # run model for all weighing types (default is just draft)
     weighing_types = cfg.get("weight_type", "draft").split(",")
+    lora_changed = False        # check if previous config was a lora param
+
     for wt in weighing_types:
         wt_fn = get_weight_fn(wt)
+        if wt.startswith("lora"):
+            lora_changed = True
+            _, val = wt.split("_")
+            val = float(val)
+            print("lora with val: ", val)
+            # change the lora parameter of the method
+            model = ptl_model.model
+            for _, module in model.named_modules():
+                if isinstance(module, AdapterModuleMixin) and module.is_adapter_available():
+                    lora_linear_adapter = module.get_adapter_module(AdapterName.PARALLEL_LINEAR_ADAPTER)
+                    module.lora_network_alpha = lora_linear_adapter.dim * val
+        else:
+            # set it back to 1
+            if lora_changed:
+                lora_changed = False
+                for _, module in model.named_modules():
+                    if isinstance(module, AdapterModuleMixin) and module.is_adapter_available():
+                        module.lora_network_alpha = None
 
         # reset generator for each type of weighing to compare effect of seed
         gen = torch.Generator(device='cpu')
@@ -285,7 +310,7 @@ def main(cfg) -> None:
             # generate image
             latents = get_latents(len(prompts), ptl_model, gen)
             # TODO(@rohitrango): make this also return kl values
-            images, = ptl_model.annealed_guidance(prompts, latents, weighing_fn=wt_fn, return_kl=True)
+            images = ptl_model.annealed_guidance(prompts, latents, weighing_fn=wt_fn) #, return_kl=True)
             images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
             for index, image in zip(indices, images):
                 Image.fromarray(image).save(osp.join(pp_save_path, f"{index:05d}.png"))

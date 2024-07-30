@@ -128,7 +128,7 @@ class PickscoreMultiCropRewardModel(MegatronModule):
         self.aggregator_name = aggregator
         self.set_aggregator(aggregator, attn_cfg, model_parallel_config)
         self.logit_scale = torch.nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-        
+
         ## Load from pretrained clip model
         from_pretrained = model_cfg.get('from_pretrained')
         if from_pretrained is not None:
@@ -459,6 +459,27 @@ class PickscoreMultiCropRewardModel(MegatronModule):
             with torch.set_grad_enabled(i in grad_idx):
                 encoded_features.append(self.vision_encoder(image_crops[i]))   # [B, D] or [B, S, D]
         return encoded_features, image_centers, grad_idx
+    
+    def get_clip_score(self, images, captions):
+        ''' images are a list of [c, h, w], captions are (b, s=77) '''
+        images = torch.stack(images, 0)
+        img_feature = self.vision_encoder(images)
+        # if post processing for vision encoder is off, perform postprocess manually
+        if not self.vision_encoder.post_process:
+            if self.vision_encoder.global_average_pool:
+                img_feature = img_feature.mean(dim=1)
+            else:
+                img_feature = img_feature[:, 0]
+            img_feature = self.vision_encoder.head(img_feature)
+        # if post processing for text encoder is off, perform postprocess manually
+        txt_feature = self.text_encoder(captions)  # [S, B, D] or [B, D]
+        if not self.text_encoder.post_process:
+            txt_feature = txt_feature[captions.argmax(dim=-1), torch.arange(txt_feature.shape[1])]  # [B, D]
+            txt_feature = self.text_encoder.head(txt_feature)
+        # compute dot product and multiply with coefficient
+        clip_score = self.logit_scale.exp() * (F.normalize(img_feature, dim=-1) * F.normalize(txt_feature, dim=-1)).sum(1)  # [B,]
+        return clip_score
+
 
     def get_reward(self, images, captions,):
         # images have to be resized, sample interpolation strategy and resolution
@@ -647,6 +668,7 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
         self.transform_size = 224
         self.rescale_param = 0.00392156862745098   # we dont need this, as we assume the dataloader performs the preprocessing to openai mean/std 
         self.differentiable_preprocess = self.diff_preprocess()
+        self.differentiable_preprocess_downsized = self.diff_preprocess_downsized()
         _, self.text_transform = get_preprocess_fns(self.cfg, tokenizer=self.tokenizer, is_train=False) 
 
     def rescale(self, image):
@@ -660,9 +682,21 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
             ]
         )
 
-    def preprocess(self, images, captions):
+    def diff_preprocess_downsized(self):
+        ''' adds additional downsampling for global image (to compute clip loss) '''
+        return Compose(
+            [
+                Resize(self.transform_size, interpolation=BICUBIC, antialias=True),
+                CenterCrop(self.transform_size),
+                self.rescale,
+                Normalize(self.openai_dataset_mean, self.openai_dataset_std),
+            ]
+        )
+
+    def preprocess(self, images, captions, downsample=False):
         text_transform = self.text_transform
-        images = [self.differentiable_preprocess(img.permute(2, 0, 1)).to(torch.cuda.current_device()).float() for img in images]
+        preprocess_fn = self.differentiable_preprocess_downsized if downsample else self.differentiable_preprocess 
+        images = [preprocess_fn(img.permute(2, 0, 1)).to(torch.cuda.current_device()).float() for img in images]
         captions_list = [text_transform(captions[i]) for i in range(len(images))]
         captions = torch.stack(captions_list).to(torch.cuda.current_device())
         return images, captions
@@ -670,6 +704,10 @@ class MegatronCLIPMultiCropRewardModel(MegatronCLIPModel):
     def get_reward(self, images, captions):
         images, captions = self.preprocess(images, captions)
         return self.model.get_reward(images, captions)
+    
+    def get_clip_score(self, images, captions):
+        images, captions = self.preprocess(images, captions, downsample=True)
+        return self.model.get_clip_score(images, captions)
 
     def model_provider_func(self, pre_process, post_process):
         """Model depends on pipeline paralellism."""
