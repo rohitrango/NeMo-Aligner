@@ -350,6 +350,8 @@ def main(cfg) -> None:
         
         ## Get custom prompts
         coverage_save_path = osp.join(save_root_dir, "saved_images", wt, "coverage")
+        coverage_exists = osp.exists(coverage_save_path)
+        torch.distributed.barrier()
         if local_rank == 0:
             os.makedirs(coverage_save_path, exist_ok=True)
         torch.distributed.barrier()
@@ -363,6 +365,8 @@ def main(cfg) -> None:
                 custom_prompts = custom_prompts[:-1]
             # create samples and then create batch
             custom_prompts = list(enumerate(custom_prompts))[local_rank::world_size]
+            if coverage_exists:
+                custom_prompts = []
             # get another generator
             cgen = torch.Generator(device='cpu')
             cgen.manual_seed((1243 + 77837 * local_rank)%(int(2**32 - 1)))

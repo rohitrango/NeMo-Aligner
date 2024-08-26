@@ -23,8 +23,7 @@ WEBDATASET_PATH=/opt/nemo-aligner/datasets/${DATASET}
 # RUN_DIR=/opt/nemo-aligner/sd_draft_runs/sd_draft_run_${JOBNAME}_lr_${LR}_data_${DATASET}_kl_${KL_COEF}_bs_${GLOBAL_BATCH_SIZE}_infstep_${INF_STEPS}_eta_${ETA}_peft_${PEFT}
 # LOGDIR=${RUN_DIR}/logs
 # mkdir -p ${LOGDIR}
-
-pip install decord
+# pip install decord
 
 CONFIG_PATH="/opt/nemo-aligner/examples/mm/stable_diffusion/conf"
 CONFIG_NAME="draftp_sd"
@@ -69,4 +68,5 @@ export HYDRA_FULL_ERROR=1 \
     exp_manager.wandb_logger_kwargs.name=${WANDB_NAME} \
     exp_manager.resume_if_exists=True \
     exp_manager.explicit_log_dir=${DIR_SAVE_CKPT_PATH} \
-    exp_manager.wandb_logger_kwargs.project=${PROJECT} # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt
+    exp_manager.wandb_logger_kwargs.project=${PROJECT} $ADDITIONAL_KWARGS
+    # &> ${LOGDIR}/draft_log_${SLURM_LOCALID}.txt

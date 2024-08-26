@@ -6,28 +6,44 @@ from os import path as osp
 import json
 import torch
 
-files = [
-    'sdxl_clip_eval.txt',
-    'sdxl_pickscore_eval.txt',
-    'sdxl_hpsv2.txt',
-    'sdxl_partiprompts.txt',
-    'sdxl_coverage.txt',
-]
+## files and save path
+# files = [
+#     'sdxl_clip_eval.txt',
+#     'sdxl_pickscore_eval.txt',
+#     'sdxl_hpsv2.txt',
+#     'sdxl_partiprompts.txt',
+#     'sdxl_coverage.txt',
+# ]
+# save_json = "sdxl_results.json"
+# metadata = [
+#     {'metric': 'clip'},
+#     {'metric': 'pickscore'},
+#     {'metric': 'hpsv2'},
+#     {'metric': 'hpsv2'},
+#     {'coverage': True}
+# ]
 
-# dummy for now
+## changed stats for lora
+files = [
+    'sdxl_lora_eval/sdxl_lora_clip.txt',
+    'sdxl_lora_eval/sdxl_lora_pickscore.txt',
+    'sdxl_lora_eval/sdxl_lora_hpsv2.txt',
+    'sdxl_lora_eval/sdxl_lora_coverage.txt',
+]
+save_json = "sdxl_lora_results.json"
 metadata = [
     {'metric': 'clip'},
     {'metric': 'pickscore'},
     {'metric': 'hpsv2'},
-    {'metric': 'hpsv2'},
     {'coverage': True}
 ]
 
-# path_pattern = r"kl(-?\d+\.?\d*)/.*?/saved_images/([^/]+)/"
 path_pattern = r"kl([-+]?\d*\.?\d+)/.*saved_images/(.+)/"
 
 def postprocess_method(method):
     if 'power' in method:
+        return float(method.split("_")[1])
+    elif 'lora' in method:
         return float(method.split("_")[1])
     elif method == 'linear':
         return 1.0
@@ -36,7 +52,7 @@ def postprocess_method(method):
     elif method == 'base':
         return np.inf
     else:
-        raise ValueError
+        raise ValueError(f"Unsupported mehod {method}")
 
 # get name and kl
 def find_method_name(data):
@@ -69,14 +85,14 @@ def find_metrics(data, meta={}):
     for line in data:
         tokens = line.replace("\t", " ").split(" ")
         is_num = np.array([int(isinstance(tryfloat(x), float)) for x in tokens])
-        if np.sum(is_num) == 1:
+        if np.sum(is_num) == 1 and 'Found' not in line:
             fidx = np.where(is_num)[0][0]
             val = float(tokens[fidx])
         elif np.sum(is_num) == 2:
             fidx, sidx = np.where(is_num)[0][:2]
             val = float(tokens[fidx])
         else:
-            assert np.sum(is_num) == 0, line
+            assert np.sum(is_num) == 0 or 'Found' in line, line
             continue
         # get the part before the first part 
         prefix = " ".join(tokens[:fidx]).lower()
@@ -97,6 +113,7 @@ def find_metrics(data, meta={}):
                 elif 'photo' in prefix:
                     cfg['HPSv2 (Photo)'] = val
             else:
+                print(meta, data)
                 raise ValueError
     return res
 
@@ -126,10 +143,9 @@ for file, meta in zip(files, metadata):
 
 results_n = {str(k[0]) + "_" + str(k[1]): v for k, v in results.items()}
 
-save_json = "sdxl_results.json"
 if not osp.exists(save_json):
     with open(save_json, 'w') as fi:
-        fi.write(json.dumps(results_n))
+        fi.write(json.dumps(results_n, indent=2))
 else:
     from pprint import pprint
     pprint(results_n)

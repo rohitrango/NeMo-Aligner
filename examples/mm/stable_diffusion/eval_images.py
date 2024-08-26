@@ -133,7 +133,7 @@ def hps_eval(args):
         pp_images = sorted(glob(osp.join(path, 'partiprompts', "*.png")))
         hpsv2_path = osp.join(path, 'hpsv2')
         # get HPSv2 result 
-        hpsv2_result = hpsv2.evaluate(hpsv2_path, args.version)
+        hpsv2_result = hpsv2.evaluate(hpsv2_path, batch_size=100, hps_version=args.version)
 
         # compute PartiPrompt results
         if len(indexed_pp_prompts) == len(pp_images):
@@ -207,17 +207,22 @@ def clip_model_eval(args, model='pickscore'):
                 print("Mismatch in number of prompts and images", len(hps_prompts), len(hps_images))
         print()
 
-def compute_fid_from_features(f1, f2, num_classes=40):
+def compute_fid_from_features(f1, f2, num_classes=40, return_fid_only=False, return_cov=False):
     ''' compute fid from features1 and features of size (M, D) and (N, D) '''
     assert (f1.shape[0] % num_classes) == 0 and (f2.shape[0] % num_classes) == 0 and num_classes >= 1
     m1, m2 = np.mean(f1, axis=0), np.mean(f2, axis=0)
     s1, s2 = np.cov(f1, rowvar=False), np.cov(f2, rowvar=False)
+    fid = calculate_frechet_distance(m1, s1, m2, s2)
+    if return_fid_only:
+        if return_cov:
+            return fid, s1, s2
+        else:
+            return fid
     # compute spectral distance
     eig1, eig2 = np.linalg.eigvals(s1), np.linalg.eigvals(s2)
     spec = np.linalg.norm(eig1 - eig2)
     logspec = np.linalg.norm(np.log10(eig1 + 1e-10) - np.log10(eig2 + 1e-10))        # log spectral distance
     # compute fid
-    fid = calculate_frechet_distance(m1, s1, m2, s2)
     if num_classes == 1:
         return fid, fid, spec, logspec
     # compute classwise fid
@@ -262,12 +267,103 @@ def calculate_precision_recall_part(features_1, features_2, neighborhood=3, batc
     return precision, recall
 
 @torch.no_grad()
+def coverage_model_eval_whiten(args, base_model_filters=['base', 'kl0.0'], num_gpus=8):
+    ''' 
+    given list of paths, find the base model and discrepancy of all other models after some data standardization
+    '''
+    paths = sorted(glob(args.paths))
+    if args.base_path is not None:
+        paths.append(args.base_path)
+    print(f"Found {len(paths)} paths.")
+    is_base_path = [all([x in path for x in base_model_filters]) for path in paths]
+    if np.array(is_base_path).astype(int).sum() < 1:
+        raise ValueError("At least one path should satisfy the base criteria.")
+    base_paths = []
+    other_paths = []
+    for i, basepathflag in enumerate(is_base_path):
+        if basepathflag:
+            print(f"{paths[i]} is a base path.")
+            base_paths.append(paths[i])
+        else:
+            other_paths.append(paths[i])
+    print("Generating FID stats...")
+    # create commands to generate stats
+    commands = [[] for _ in range(num_gpus)]
+    for gpu, path in enumerate(paths):
+        gpu = gpu % num_gpus
+        imgpath = osp.join(path, "coverage")
+        savepath = osp.join(path, "fid_stats.npz")
+        if osp.exists(savepath):
+            continue
+        cmd = f"python -m pytorch_fid --device cuda:{gpu} --save-stats {imgpath} {savepath}"
+        commands[gpu].append(cmd)
+    # run all non-empty commands and wait
+    commands = list(filter(lambda x: len(x) > 0, commands))
+    commands = [" && ".join(commandlist) for commandlist in commands]
+    for cmd in commands:
+        print(cmd)
+    processes = [subprocess.Popen(cmd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) for cmd in commands]
+    # Wait for all processes to complete
+    for proc in processes:
+        proc.wait()  # Waits for each process to finish
+    
+    def subtract_mean(tensor):
+        # tensor: [N, D]
+        tensor_mu = tensor.mean(0)[None]  # [1, D]
+        tensor = tensor - tensor_mu
+        return tensor, tensor_mu
+    
+    def invert_cov_rotation(tensor, cov):
+        ''' 
+        tensor: [n, d] rows   (already mean subtracted)
+        cov: [d, d] cov matrix
+        '''
+        _, R = np.linalg.eig(cov)   # cov = R.l.RT
+        R = np.real(R).astype(np.float32)
+        tensor = tensor @ torch.FloatTensor(R)  # Y = XR ==> Y^T.Y = R^T (R l R^T) R = l
+        return tensor
+
+    # finished saving fid stats, 
+    for base_path in base_paths:
+        data = np.load(osp.join(base_path, "fid_stats.npz"))
+        base_features = data['mu']             # all samples, use modified pytorch_fid function to keep them
+        base_features, base_features_mu = subtract_mean(base_features)
+        base_features_torch = torch.FloatTensor(base_features)
+        base_features_torchcov = None
+
+        print(f"Base Path: {base_path}")
+        for cmp_path in other_paths:
+            print(f"Path: {cmp_path}")
+            cmp_features = np.load(osp.join(cmp_path, "fid_stats.npz"))['mu']
+            cmp_features, cmp_features_mu = subtract_mean(cmp_features)
+            cmp_features_torch = torch.FloatTensor(cmp_features)
+            # compute mean-subtracted fid
+            fid, s_base, s_cmp = compute_fid_from_features(base_features, cmp_features, 1, return_fid_only=True, return_cov=True)
+            # create features that are inverse-rotated
+            if base_features_torchcov is None:
+                base_features_torchcov = invert_cov_rotation(base_features_torch, s_base)
+            cmp_features_torchcov = invert_cov_rotation(cmp_features_torch, s_cmp)
+
+            prc, rcl = calculate_precision_recall_part(base_features_torchcov, cmp_features_torchcov, neighborhood=10,)
+            kid = kid_features_to_metric(base_features_torchcov, cmp_features_torchcov, verbose=False)['kernel_inception_distance_mean']
+            
+            print(f"m-fid: {fid:.06f}")
+            print(f"w-precision: {prc:.05f}")
+            print(f"w-recall: {rcl:.05f}")
+            print(f"w-kid: {kid:.05f}")
+            print()
+        
+
+
+@torch.no_grad()
 def coverage_model_eval(args, base_model_filters=['base', 'kl0.0'], num_gpus=8):
     ''' 
     given a list of paths, find the base model, compute the discrepancy of all other models with respect to it
     '''
     # prepare paths
     paths = sorted(glob(args.paths))
+    if args.base_path is not None:
+        paths.append(args.base_path)
     print(f"Found {len(paths)} paths.")
     is_base_path = [all([x in path for x in base_model_filters]) for path in paths]
     if np.array(is_base_path).astype(int).sum() < 1:
@@ -328,20 +424,28 @@ def coverage_model_eval(args, base_model_filters=['base', 'kl0.0'], num_gpus=8):
             # compute kid
 
 
-
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--paths', type=str, required=True)
+    parser.add_argument('--base_path', type=str, required=False, default=None)
     parser.add_argument('--partiprompt_path', type=str, default="/opt/nemo-aligner/datasets/PartiPrompts.tsv")
     parser.add_argument('--version', type=str, default="v2.1")
     parser.add_argument('--pickscore_path', type=str, default="/opt/nemo-aligner/checkpoints/pickscore.nemo")
+    parser.add_argument("--mode", type=str, default="hps")
     
     # read args and call main
     args = parser.parse_args()
-    # hps_eval(args)
-    # clip_model_eval(args)
-    # clip_model_eval(args, model='clip')
-    coverage_model_eval(args)
+    mode = args.mode
+    if mode == 'hps':
+        hps_eval(args)
+    elif mode == 'pickscore':
+        clip_model_eval(args)
+    elif mode == 'clip':
+        clip_model_eval(args, model='clip')
+    elif mode == 'coverage':
+        coverage_model_eval(args)
+    elif mode == 'coverage-whiten':
+        coverage_model_eval_whiten(args)
+    else:
+        print("invalid mode")
 

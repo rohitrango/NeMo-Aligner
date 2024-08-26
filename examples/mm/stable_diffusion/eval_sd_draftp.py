@@ -24,6 +24,8 @@ from functools import partial
 from torch import nn
 import numpy as np
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker, get_data_parallel_rng_tracker_name
+from nemo.core.classes.mixins.adapter_mixins import AdapterModuleMixin
+from nemo.collections.nlp.modules.common.megatron.adapters.parallel_adapters import ParallelLinearAdapter, AdapterName
 from PIL import Image
 import pandas as pd
 from os import path as osp
@@ -86,6 +88,9 @@ def get_weight_fn(wt_type: str):
     elif wt_type.startswith("step"):   # use a step function (step_{p})
         frac = float(wt_type.split("_")[1])
         wt_draft = lambda sigma, sigma_next, i, total: float((i*1.0/total) >= frac)
+    elif wt_type.startswith("lora"):
+        # use draft
+        wt_draft = lambda sigma, sigma_next, i, total: 1
     else:
         raise ValueError(f"invalid weighing type: {wt_type}")
     return wt_draft
@@ -208,6 +213,7 @@ def main(cfg) -> None:
     ### Run PartiPrompts
     batch_size = 8
     partiprompts_data_path = "/opt/nemo-aligner/datasets/PartiPrompts.tsv"
+    custom_prompts_path = "/opt/nemo-aligner/datasets/coverage_prompts.txt"
     partiprompts = pd.read_csv(partiprompts_data_path, delimiter="\t")['Prompt']
     partiprompts = partiprompts[local_rank::world_size]
     partiprompts = list(partiprompts.iteritems())
@@ -218,8 +224,29 @@ def main(cfg) -> None:
 
     # run model for all weighing types (default is just draft)
     weighing_types = cfg.get("weight_type", "draft").split(",")
+    lora_changed = False        # check if previous config was a lora param
+
     for wt in weighing_types:
         wt_fn = get_weight_fn(wt)
+        print(wt)
+        if wt.startswith("lora"):
+            lora_changed = True
+            _, val = wt.split("_")
+            val = float(val)
+            print("lora with val: ", val)
+            # change the lora parameter of the method
+            model = ptl_model.model
+            for _, module in model.named_modules():
+                if isinstance(module, AdapterModuleMixin) and module.is_adapter_available():
+                    lora_linear_adapter = module.get_adapter_module(AdapterName.PARALLEL_LINEAR_ADAPTER)
+                    module.lora_network_alpha = lora_linear_adapter.dim * val
+        else:
+            # set it back to 1
+            if lora_changed:
+                lora_changed = False
+                for _, module in model.named_modules():
+                    if isinstance(module, AdapterModuleMixin) and module.is_adapter_available():
+                        module.lora_network_alpha = None
 
         # reset generator for each type of weighing to compare effect of seed
         gen = torch.Generator(device='cpu')
@@ -247,9 +274,8 @@ def main(cfg) -> None:
             prompts = [x[1] for x in batch]
             # generate image
             latents = get_latents(len(prompts), ptl_model, gen)
-            # TODO(@rohitrango): make this also return kl values
-            images, = ptl_model.annealed_guidance(prompts, latents, weighing_fn=wt_fn, return_kl=True)
-            images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
+            images = ptl_model.annealed_guidance(prompts, latents, weighing_fn=wt_fn)# , return_kl=True)
+            images = images.permute(0, 2, 3, 1).detach().float().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
             for index, image in zip(indices, images):
                 Image.fromarray(image).save(osp.join(pp_save_path, f"{index:05d}.png"))
         logging.info("Saved partiprompts images.")
@@ -281,11 +307,40 @@ def main(cfg) -> None:
                 # run diffusion
                 latents = get_latents(len(prompts), ptl_model, gen)
                 images = ptl_model.annealed_guidance(prompts, latents, weighing_fn=wt_fn)
-                images = images.permute(0, 2, 3, 1).detach().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
+                images = images.permute(0, 2, 3, 1).detach().float().cpu().numpy().astype(np.uint8)  # outputs are already scaled from [0, 255]
                 for index, image in zip(indices, images):
                     Image.fromarray(image).save(osp.join(hpsv2_save_path, style, f"{index:05d}.jpg"))
             logging.info(f"Saved HPSv2 images with style: {style}.")
     
+
+        ## Get custom prompts
+        coverage_save_path = osp.join(save_root_dir, "saved_images", wt, "coverage")
+        if local_rank == 0:
+            os.makedirs(coverage_save_path, exist_ok=True)
+        torch.distributed.barrier()
+        images_per_prompt = 50
+        images_per_batch = 10
+        logging.info(f"Saving custom images to {coverage_save_path}.")
+        # create prompts
+        with open(custom_prompts_path, "r") as fi:
+            custom_prompts = fi.read().split("\n")
+            if custom_prompts[-1] == "":
+                custom_prompts = custom_prompts[:-1]
+            # create samples and then create batch
+            custom_prompts = list(enumerate(custom_prompts))[local_rank::world_size]
+            custom_prompts = []
+            # get another generator
+            cgen = torch.Generator(device='cpu')
+            cgen.manual_seed((1243 + 77837 * local_rank)%(int(2**32 - 1)))
+            for promptidx, prompt in custom_prompts:
+                for batchidx in range(images_per_prompt // images_per_batch):
+                    latents = get_latents(images_per_batch, ptl_model, cgen)
+                    images = ptl_model.annealed_guidance([prompt]*images_per_batch, latents, weighing_fn=wt_fn)
+                    images = images.permute(0, 2, 3, 1).detach().float().cpu().numpy().astype(np.uint8) 
+                    for imgidx, image in enumerate(images):
+                        globalimgidx = batchidx * images_per_batch + imgidx
+                        Image.fromarray(image).save(osp.join(coverage_save_path, f"prompt_{promptidx:02d}_image{globalimgidx:05d}.jpg"))
+        logging.info(f"Saved custom images.")
 
 
 if __name__ == "__main__":
